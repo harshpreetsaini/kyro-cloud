@@ -1,0 +1,135 @@
+export type RuntimeState =
+  | "OFFLINE"
+  | "STARTING"
+  | "INITIALIZING"
+  | "PREPARING"
+  | "CONNECTING"
+  | "ONLINE"
+  | "STREAMING"
+  | "RECONNECTING"
+  | "STOPPING"
+  | "ERROR";
+
+export interface GpuInfo {
+  name: string | null;
+  vramMb: number | null;
+  driver: string | null;
+  temperatureC: number | null;
+  utilizationPct: number | null;
+  memoryUtilPct: number | null;
+  available: boolean;
+}
+
+export type NetworkQuality = "excellent" | "good" | "fair" | "poor" | "unknown";
+
+export interface SystemInfo {
+  os: string | null;
+  hostname: string | null;
+  gpu: GpuInfo;
+  cpu: { model: string | null; cores: number | null; utilizationPct: number | null };
+  ram: { totalMb: number | null; usedMb: number | null };
+  storage: { totalMb: number | null; usedMb: number | null; mounted: boolean };
+  network: { pingMs: number | null; bitrateMbps: number | null; quality: NetworkQuality };
+  simulated: boolean;
+}
+
+export interface SystemStats {
+  gpuPct: number | null;
+  gpuTempC: number | null;
+  cpuPct: number | null;
+  ramUsedMb: number | null;
+  ramTotalMb: number | null;
+  vramUsedMb: number | null;
+  vramTotalMb: number | null;
+  fps: number | null;
+  frameTimeMs: number | null;
+  latencyMs: number | null;
+  bitrateMbps: number | null;
+  streaming: boolean;
+}
+
+export type StreamType = "vnc" | "webrtc";
+
+export interface StreamClientConfig {
+  type: StreamType;
+  url?: string;
+  signalingUrl?: string;
+  password?: string | null;
+  resolution: string;
+  fps: number;
+  quality: string;
+}
+
+export type Compatibility = "SUPPORTED" | "PARTIAL" | "UNKNOWN" | "UNSUPPORTED";
+
+export interface GameEntry {
+  id: string;
+  name: string;
+  executable: string;
+  arguments?: string;
+  workingDir?: string;
+  launcher?: string;
+  compatibility: Compatibility;
+  installed: boolean;
+  lastPlayed?: string | null;
+}
+
+export interface FileItem {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  sizeBytes: number | null;
+  modified: string | null;
+}
+
+export type WSEventType =
+  | "runtime.status"
+  | "runtime.progress"
+  | "system.stats"
+  | "system.info"
+  | "stream.status"
+  | "game.started"
+  | "game.stopped"
+  | "file.progress"
+  | "terminal.output"
+  | "notification"
+  | "error";
+
+export interface WSEvent<T = unknown> {
+  type: WSEventType;
+  payload: T;
+  ts: number;
+}
+
+export interface RuntimeProgressStep {
+  label: string;
+  status: "pending" | "active" | "done" | "error";
+}
+
+export interface ApiResponse<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: string;
+}
+
+export interface SessionInfo {
+  id: string;
+  state: RuntimeState;
+  startedAt: number | null;
+  durationMs: number | null;
+  provider: string;
+  streaming: string;
+  simulated: boolean;
+  progress: RuntimeProgressStep[];
+  error?: string | null;
+}
+
+export interface SettingsState {
+  resolution: "720p" | "900p" | "1080p" | "Auto";
+  fps: 30 | 60 | "Auto";
+  quality: "low" | "balanced" | "high";
+  autoReconnect: boolean;
+  perfOverlay: boolean;
+  compactMode: boolean;
+  mouseSensitivity: number;
+}

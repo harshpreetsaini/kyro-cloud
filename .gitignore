@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+build/
+
+# Env / secrets — never commit
+.env
+.env.local
+.env*.local
+
+# Runtime data
+data/
+
+# Python
+__pycache__/
+*.pyc
+runtime-agent/**/__pycache__/
+
+# OS
+.DS_Store
+
+# Editor / misc
+.vscode/
+*.tsbuildinfo
