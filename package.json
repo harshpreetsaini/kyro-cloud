@@ -4,9 +4,11 @@
   "private": true,
   "description": "LUNA CLOUD — Your PC. Anywhere. A private personal cloud gaming platform.",
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "dev": "node server.mjs",
     "build": "next build",
     "start": "NODE_ENV=production node server.mjs",
+    "deploy": "docker compose up --build -d",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.mjs"
