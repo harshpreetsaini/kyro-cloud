@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: luna-cloud
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: NEXT_PUBLIC_APP_NAME
+        value: LUNA CLOUD
+      - key: BACKEND_URL
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: LUNA_USER
+        sync: false
+      - key: LUNA_PASSWORD
+        sync: false
+      - key: RUNTIME_AUTH_SECRET
+        generateValue: true
+      - key: COMPUTE_PROVIDER
+        value: colab
+      - key: STREAMING_PROVIDER
+        value: webrtc
