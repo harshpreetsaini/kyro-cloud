@@ -15,8 +15,10 @@ echo "[bootstrap] updating apt..."
 sudo apt-get update -qq || apt-get update -qq || true
 
 echo "[bootstrap] installing desktop environment + VNC..."
-sudo apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server 2>/dev/null || \
-  apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server || true
+sudo apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server dbus-x11 2>/dev/null || \
+  apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server dbus-x11 || true
+# Ensure openbox is available as a lightweight WM fallback
+sudo apt-get install -y -qq openbox 2>/dev/null || apt-get install -y -qq openbox || true
 
 echo "[bootstrap] installing Python deps..."
 python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" || true
