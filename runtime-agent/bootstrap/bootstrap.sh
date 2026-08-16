@@ -11,14 +11,14 @@ export LUNA_DISPLAY="${LUNA_DISPLAY:-:1}"
 
 AGENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "[bootstrap] updating apt..."
-sudo apt-get update -qq || apt-get update -qq || true
+echo "[bootstrap] updating apt (this may take 1-2 minutes)..."
+sudo apt-get update  || apt-get update  || true
 
-echo "[bootstrap] installing desktop environment + VNC..."
-sudo apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server dbus-x11 2>/dev/null || \
-  apt-get install -y -qq xfce4 xvfb tigervnc-standalone-server dbus-x11 || true
+echo "[bootstrap] installing desktop environment + VNC (this may take 3-5 minutes)..."
+sudo apt-get install -y  xfce4 xvfb tigervnc-standalone-server dbus-x11 2>/dev/null || \
+  apt-get install -y  xfce4 xvfb tigervnc-standalone-server dbus-x11 || true
 # Ensure openbox is available as a lightweight WM fallback
-sudo apt-get install -y -qq openbox 2>/dev/null || apt-get install -y -qq openbox || true
+sudo apt-get install -y  openbox 2>/dev/null || apt-get install -y  openbox || true
 
 echo "[bootstrap] installing Python deps..."
 python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" || true
@@ -36,6 +36,7 @@ fi
 
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..."
 cd "$AGENT_DIR/agent"
-nohup python3 main.py > /tmp/luna-agent.log 2>&1 &
+nohup python3 main.py > /tmp/luna-agent.log 2>&1 & \
+  echo "[bootstrap] agent started in background"
 
 echo "[bootstrap] done. Agent PID $!. Tail logs with: !tail -f /tmp/luna-agent.log"
