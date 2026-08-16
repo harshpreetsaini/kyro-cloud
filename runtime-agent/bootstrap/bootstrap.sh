@@ -34,9 +34,12 @@ else
   echo "[bootstrap] selkies-gstreamer pip install failed — WebRTC streaming unavailable until installed."
 fi
 
+echo "[bootstrap] killing any old agents..."
+pkill -f "python3 main.py" 2>/dev/null || true
+
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..."
 cd "$AGENT_DIR/agent"
 nohup python3 main.py > /tmp/luna-agent.log 2>&1 & \
-  echo "[bootstrap] agent started in background"
+  echo "[bootstrap] agent started in background (PID $!)"
 
-echo "[bootstrap] done. Agent PID $!. Tail logs with: !tail -f /tmp/luna-agent.log"
+echo "[bootstrap] done. Tail logs: !tail -f /tmp/luna-agent.log"
