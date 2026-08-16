@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { RuntimeProvider } from "@/components/providers/RuntimeProvider";
-import { Notifications } from "@/components/Notifications";
 import { APP_NAME, APP_TAGLINE } from "@/lib/config/branding";
 
 export const metadata: Metadata = {
@@ -20,12 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>
-        <RuntimeProvider>
-          {children}
-          <Notifications />
-        </RuntimeProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

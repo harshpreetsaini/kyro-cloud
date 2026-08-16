@@ -1,14 +1,21 @@
+"use client";
+
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
+import { RuntimeProvider } from "@/components/providers/RuntimeProvider";
+import { Notifications } from "@/components/Notifications";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0">
-        <TopBar />
-        <main className="flex-1 overflow-auto p-5">{children}</main>
+    <RuntimeProvider>
+      <div className="flex h-screen overflow-hidden">
+        <Sidebar />
+        <div className="flex-1 flex flex-col min-w-0">
+          <TopBar />
+          <main className="flex-1 overflow-auto p-5">{children}</main>
+        </div>
       </div>
-    </div>
+      <Notifications />
+    </RuntimeProvider>
   );
 }
