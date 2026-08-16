@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# BUILD_CACHE_BUST: 1786898838
 
 FROM node:20-slim AS deps
 WORKDIR /app
