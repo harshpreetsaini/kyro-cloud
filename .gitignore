@@ -27,3 +27,4 @@ runtime-agent/**/__pycache__/
 # Editor / misc
 .vscode/
 *.tsbuildinfo
+.vercel
