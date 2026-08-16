@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { FileItem } from "@shared/types";
+import { api } from "@/lib/config/api";
+import { authHeader } from "@/lib/auth/client";
 
 export function FileManager({ basePath = "/" }: { basePath?: string }) {
   const [path, setPath] = useState(basePath);
@@ -15,7 +17,9 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
 
   const load = useCallback(async (p: string) => {
     setLoading(true);
-    const res = await fetch(`/api/files/list?path=${encodeURIComponent(p)}`);
+    const res = await fetch(api(`/api/files/list?path=${encodeURIComponent(p)}`), {
+      headers: { ...authHeader() },
+    });
     const json = await res.json();
     setItems(json.data || []);
     setLoading(false);
@@ -27,9 +31,9 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
 
   async function mkdir() {
     if (!folderName) return;
-    await fetch("/api/files/mkdir", {
+    await fetch(api("/api/files/mkdir"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeader() },
       body: JSON.stringify({ path, name: folderName }),
     });
     setNewFolder(false);
@@ -39,15 +43,18 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
 
   async function del(item: FileItem) {
     if (!confirm(`Delete ${item.name}?`)) return;
-    await fetch(`/api/files/delete?path=${encodeURIComponent(item.path)}`, { method: "DELETE" });
+    await fetch(api(`/api/files/delete?path=${encodeURIComponent(item.path)}`), {
+      method: "DELETE",
+      headers: { ...authHeader() },
+    });
     load(path);
   }
 
   async function doRename(item: FileItem) {
     if (!renameVal) return;
-    await fetch("/api/files/rename", {
+    await fetch(api("/api/files/rename"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeader() },
       body: JSON.stringify({ path: item.path, newName: renameVal }),
     });
     setRenaming(null);
@@ -60,8 +67,22 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("path", path);
-    await fetch("/api/files/upload", { method: "POST", body: fd });
+    await fetch(api("/api/files/upload"), { method: "POST", headers: { ...authHeader() }, body: fd });
     load(path);
+  }
+
+  async function download(item: FileItem) {
+    const res = await fetch(api(`/api/files/download?path=${encodeURIComponent(item.path)}`), {
+      headers: { ...authHeader() },
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = item.name;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -142,14 +163,14 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
                     {it.type === "directory" ? "folder" : `${((it.sizeBytes || 0) / 1024).toFixed(0)} KB`}
                   </td>
                   <td className="text-right whitespace-nowrap opacity-0 group-hover:opacity-100">
-                    {it.type === "file" && (
-                      <a
-                        href={`/api/files/download?path=${encodeURIComponent(it.path)}`}
-                        className="text-xs text-accent mr-2"
-                      >
-                        ↓
-                      </a>
-                    )}
+                     {it.type === "file" && (
+                       <button
+                         className="text-xs text-accent mr-2"
+                         onClick={() => download(it)}
+                       >
+                         ↓
+                       </button>
+                     )}
                     <button
                       className="text-xs text-muted mr-2"
                       onClick={() => {

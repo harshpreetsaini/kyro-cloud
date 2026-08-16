@@ -12,6 +12,7 @@ export const RUNTIME_STATES = [
   "RECONNECTING",
   "STOPPING",
   "ERROR",
+  "DISCONNECTED",
 ] as const;
 
 export const STATE_FLOW = [
@@ -22,6 +23,16 @@ export const STATE_FLOW = [
   "CONNECTING",
   "ONLINE",
   "STREAMING",
+] as const;
+
+export const ACTIVE_STATES = [
+  "STARTING",
+  "INITIALIZING",
+  "PREPARING",
+  "CONNECTING",
+  "ONLINE",
+  "STREAMING",
+  "RECONNECTING",
 ] as const;
 
 export const PROGRESS_STEPS = [

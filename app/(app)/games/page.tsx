@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { GameCard } from "@/components/GameCard";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
+import { api } from "@/lib/config/api";
+import { authHeader } from "@/lib/auth/client";
 import type { GameEntry } from "@shared/types";
 
 export default function GamesPage() {
@@ -10,7 +12,7 @@ export default function GamesPage() {
   const [games, setGames] = useState<GameEntry[]>([]);
 
   useEffect(() => {
-    fetch("/api/games")
+    fetch(api("/api/games"), { headers: { ...authHeader() } })
       .then((r) => r.json())
       .then((j) => setGames(j.data || []));
   }, []);

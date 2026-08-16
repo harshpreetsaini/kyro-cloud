@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { wsUrl } from "@/lib/config/api";
+import { getToken } from "@/lib/auth/client";
 
 export function Terminal() {
   const [output, setOutput] = useState("");
@@ -9,8 +11,8 @@ export function Terminal() {
   const outRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws/terminal`);
+    const token = getToken();
+    const ws = new WebSocket(wsUrl("/ws/terminal") + (token ? `?token=${encodeURIComponent(token)}` : ""));
     wsRef.current = ws;
     ws.onmessage = (e) => {
       setOutput((o) => o + e.data);

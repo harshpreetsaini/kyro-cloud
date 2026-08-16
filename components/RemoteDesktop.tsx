@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
-import { APP_NAME } from "@/lib/config/branding";
+import { wsUrl } from "@/lib/config/api";
 
 export function RemoteDesktop({ className = "" }: { className?: string }) {
   const { stream } = useRuntime();
@@ -12,8 +12,9 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
   useEffect(() => {
     if (!stream || stream.type !== "vnc" || (stream as any).simulated) return;
     let cancelled = false;
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${window.location.host}${stream.url}`;
+    const url = stream.url && /^wss?:\/\//.test(stream.url)
+      ? stream.url
+      : wsUrl(stream.url || "/ws/stream");
     import("@novnc/novnc/lib/rfb").then((mod: any) => {
       if (cancelled || !containerRef.current) return;
       const RFB = mod.default || mod;

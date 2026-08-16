@@ -8,7 +8,8 @@ export type RuntimeState =
   | "STREAMING"
   | "RECONNECTING"
   | "STOPPING"
-  | "ERROR";
+  | "ERROR"
+  | "DISCONNECTED";
 
 export interface GpuInfo {
   name: string | null;

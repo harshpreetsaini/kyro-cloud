@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { APP_NAME, APP_TAGLINE } from "@/lib/config/branding";
+import { api } from "@/lib/config/api";
+import { setToken } from "@/lib/auth/client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,12 +17,17 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError("");
-    const res = await fetch("/api/auth/login", {
+    let data: { data?: { token?: string } } = {};
+    const res = await fetch(api("/api/auth/login"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    if (res.ok) {
+    try {
+      data = await res.json();
+    } catch {}
+    if (res.ok && data.data?.token) {
+      setToken(data.data.token);
       router.push("/dashboard");
     } else {
       setError("Invalid credentials");

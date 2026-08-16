@@ -3,22 +3,44 @@ import { verifySession, SESSION_COOKIE } from "./lib/auth/jwt";
 
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health"];
 
+function applyCors(res: NextResponse, origin: string | null) {
+  const allowed = process.env.FRONTEND_URL || "*";
+  res.headers.set("Access-Control-Allow-Origin", origin && allowed !== "*" ? origin : allowed);
+  res.headers.set("Access-Control-Allow-Credentials", "true");
+  res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+}
+
+function getRequestToken(req: NextRequest): string | undefined {
+  const cookie = req.cookies.get(SESSION_COOKIE)?.value;
+  if (cookie) return cookie;
+  const header = req.headers.get("authorization");
+  if (header && header.toLowerCase().startsWith("bearer ")) return header.slice(7).trim();
+  return undefined;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (PUBLIC_PATHS.includes(pathname)) return NextResponse.next();
+  const origin = req.headers.get("origin");
 
-  const token = req.cookies.get(SESSION_COOKIE)?.value;
-  const session = await verifySession(token);
+  if (req.method === "OPTIONS") {
+    const res = new NextResponse(null, { status: 204 });
+    applyCors(res, origin);
+    return res;
+  }
 
-  if (!session) {
-    if (pathname.startsWith("/api/")) {
+  const res = NextResponse.next();
+  applyCors(res, origin);
+
+  if (PUBLIC_PATHS.includes(pathname)) return res;
+
+  if (pathname.startsWith("/api/")) {
+    const session = await verifySession(getRequestToken(req));
+    if (!session) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  return res;
 }
 
 export const config = {

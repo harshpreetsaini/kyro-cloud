@@ -88,6 +88,7 @@ export function StateBadge({ state }: { state: RuntimeState }) {
     RECONNECTING: "warning",
     STOPPING: "warning",
     ERROR: "danger",
+    DISCONNECTED: "danger",
   };
   return <Badge tone={map[state] || "neutral"}>{state}</Badge>;
 }

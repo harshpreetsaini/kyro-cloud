@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState, useCallback, ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import type {
   RuntimeState,
   SessionInfo,
@@ -9,6 +10,8 @@ import type {
   StreamClientConfig,
   WSEvent,
 } from "@shared/types";
+import { api, wsUrl } from "@/lib/config/api";
+import { getToken, authHeader } from "@/lib/auth/client";
 
 export interface Notification {
   id: string;
@@ -34,12 +37,6 @@ interface RuntimeContextValue {
 
 const RuntimeContext = createContext<RuntimeContextValue | null>(null);
 
-function wsUrl() {
-  if (typeof window === "undefined") return "";
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.host}/ws`;
-}
-
 export function RuntimeProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -62,9 +59,18 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   }, [dismiss]);
 
   useEffect(() => {
+    const pathname = usePathname();
+    const router = useRouter();
+    if (!getToken() && pathname !== "/login") {
+      router.replace("/login");
+    }
+  }, []);
+
+  useEffect(() => {
     let closed = false;
     const connect = () => {
-      const ws = new WebSocket(wsUrl());
+      const token = getToken();
+      const ws = new WebSocket(wsUrl("/ws") + (token ? `?token=${encodeURIComponent(token)}` : ""));
       wsRef.current = ws;
       ws.onopen = () => {
         setConnected(true);
@@ -120,7 +126,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   }, [pushNotification]);
 
   const action = useCallback(async (path: string) => {
-    await fetch(`/api/runtime/${path}`, { method: "POST" });
+    await fetch(api(`/api/runtime/${path}`), {
+      method: "POST",
+      headers: { ...authHeader() },
+    });
   }, []);
 
   const start = useCallback(() => action("start"), [action]);
@@ -128,9 +137,9 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const restart = useCallback(() => action("restart"), [action]);
 
   const launchGame = useCallback((id: string) => {
-    fetch("/api/games/launch", {
+    fetch(api("/api/games/launch"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeader() },
       body: JSON.stringify({ id }),
     });
   }, []);

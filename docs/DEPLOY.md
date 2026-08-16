@@ -1,69 +1,83 @@
-# Deploying LUNA CLOUD backend
+# Deploying KYRO CLOUD (Vercel + Render + Colab)
 
-The backend is a single Node process (Next.js + WebSocket server in `server.mjs`). It needs
-**long-lived WebSocket support**, so use Docker / Railway / Render — not Vercel (serverless
-WebSockets are not supported there).
+Three tiers:
 
-## 1. Environment variables
+| Tier | Platform | Role |
+| --- | --- | --- |
+| Frontend | **Vercel** | Next.js UI only (dashboard, desktop, games, files, terminal, settings) |
+| Backend | **Render** | API, auth, session control, runtime registration, heartbeat, WebRTC signaling. **No GPU, no games.** |
+| Compute | **Google Colab** | GPU, desktop, games, streaming. Connects **outward** to Render. |
 
-Copy `.env.example` to `.env` (or set them in your PaaS dashboard) and change the secrets:
+The browser talks to Render for API/WS control, and to Colab directly for the game stream (WebRTC).
 
-| Variable | Purpose |
+## 1. Backend → Render
+
+The repo already contains `render.yaml` + `Dockerfile`. Render auto-deploys on push.
+
+Set these env vars in the Render dashboard (the ones marked `sync: false` are blank by default):
+
+| Variable | Value |
 | --- | --- |
-| `NEXT_PUBLIC_APP_NAME` | UI brand |
-| `BACKEND_URL` | Public base URL of this backend (used by clients/agent) |
-| `AUTH_SECRET` | Signs the web session JWT |
-| `LUNA_USER` / `LUNA_PASSWORD` | Private web login |
-| `RUNTIME_AUTH_SECRET` | Secret the Colab agent must present at `/agent` |
-| `COMPUTE_PROVIDER` | `mock` \| `local` \| `colab` |
-| `STREAMING_PROVIDER` | `vnc` \| `webrtc` |
-| `DATABASE_URL` | JSON file store path |
+| `NODE_ENV` | `production` |
+| `FRONTEND_URL` | your Vercel URL, e.g. `https://kyro-cloud.vercel.app` |
+| `AUTH_SECRET` | generated (leave blank → Render generates) |
+| `LUNA_USER` / `LUNA_PASSWORD` | private web login |
+| `RUNTIME_AUTH_SECRET` | generated; the Colab agent must match this |
+| `COMPUTE_PROVIDER` | `colab` |
+| `STREAMING_PROVIDER` | `webrtc` |
+| `HEARTBEAT_TIMEOUT_MS` | `20000` |
 
-For a Colab-connected deployment set `COMPUTE_PROVIDER=colab` and `STREAMING_PROVIDER=webrtc`.
+Render injects `$PORT`; the server listens on `0.0.0.0:$PORT`. Health: `GET /api/health`.
 
-## 2. Run locally (production)
+CORS is enabled in `middleware.ts` and allows `FRONTEND_URL`. Authentication accepts either the
+session cookie (same-origin/local) or a `Authorization: Bearer <token>` header (cross-origin/Vercel).
+
+## 2. Frontend → Vercel
+
+Deploy the **same repo** to Vercel. Vercel serves the UI; it does NOT run the backend pieces
+(API routes there are unused — the frontend calls Render instead via `NEXT_PUBLIC_API_URL`).
+
+1. New Project → import the GitHub repo.
+2. Framework preset: Next.js (auto-detected).
+3. Add Environment Variable:
+   - `NEXT_PUBLIC_API_URL` = `https://<your-render-backend>` (e.g. `https://kyro-cloud-3fp0.onrender.com`)
+4. Deploy. The frontend build inlines `NEXT_PUBLIC_API_URL` at build time.
+
+On login, the frontend stores the JWT in `localStorage` and sends it as a `Bearer` header to Render
+(cross-domain cookies are blocked, so the token-in-storage approach is required).
+
+## 3. Compute → Google Colab
+
+The Colab runtime runs the lightweight Python agent (`runtime-agent/`). It connects **outward** to
+Render, so no inbound networking is needed.
+
+1. Open `colab/notebooks/luna_cloud.ipynb` in a Colab GPU runtime.
+2. Set:
+   - `LUNA_BACKEND_WS = wss://<your-render-backend>/agent`
+   - `RUNTIME_AUTH_SECRET` = same value as on Render
+   - (optional) `LUNA_SIGNALING_URL` = public Selkies signaling URL for WebRTC
+3. Run the notebook. The agent registers, authenticates, sends heartbeats, starts the desktop +
+   streaming, and reports status.
+4. In the web app, click **Start**; the backend arms, the agent attaches, and the browser receives
+   WebRTC signaling and streams directly from Colab.
+
+## 4. Runtime lifecycle (no keep-alive)
+
+Colab is not permanent. When the runtime ends, the agent's heartbeat stops and Render marks the
+session **DISCONNECTED** (see `lib/runtime/manager.mjs`). The UI shows "Runtime disconnected —
+start a new session". Start a fresh Colab runtime and click Start again; no fake "still alive" state.
+
+## Local dev (single machine)
 
 ```bash
-npm run build
-NODE_ENV=production node server.mjs
-# or: npm start
+npm run setup          # install + .env.local + build
+npm run dev            # mock mode (no GPU)
+# real local desktop:
+COMPUTE_PROVIDER=local STREAMING_PROVIDER=vnc npm run dev
 ```
 
-Health check: `GET /api/health` → `{ ok: true }`.
-
-## 3. Docker
-
-```bash
-docker build -t luna-cloud .
-docker run -p 3000:3000 --env-file .env luna-cloud
-# or: docker compose up --build
-```
-
-## 4. Railway
-
-1. New project → Deploy from GitHub repo.
-2. Railway auto-detects `railway.json` (Dockerfile build, `node server.mjs`, healthcheck `/api/health`).
-3. Set the env vars above (generate `AUTH_SECRET` and `RUNTIME_AUTH_SECRET`).
-4. Deploy. Note the generated `https://…railway.app` URL — that is your `BACKEND_URL`.
-
-## 5. Render
-
-1. New → Web Service → connect repo.
-2. Render uses `render.yaml` (Docker runtime, healthcheck `/api/health`).
-3. Fill `BACKEND_URL` with the Render URL and set the other secrets.
-4. Deploy.
-
-## 6. Point a Colab runtime at it
-
-Open `colab/notebooks/luna_cloud.ipynb` and set:
-
-- `LUNA_BACKEND_WS = wss://<YOUR-BACKEND>/agent`
-- `RUNTIME_AUTH_SECRET` = the same value as on the backend
-
-The Python agent connects **outward**, so no inbound firewall rules are needed. Then start the
-session in the web app; the backend arms and waits for the agent, then streams via WebRTC.
-
-## Notes
-- WebSockets require a host that keeps connections open (Railway/Render/your VM do).
-- TLS is required for `wss://` from the browser; put the backend behind HTTPS (Railway/Render
-  provide this automatically; for a VM use a reverse proxy such as Caddy/Nginx).
+Notes:
+- WebSockets need a host that keeps connections open (Render does; Vercel serverless does not — that
+  is why the backend lives on Render and the frontend on Vercel).
+- TLS required for `wss://`; Render/Vercel provide HTTPS automatically.
+- Persistent game saves/mods should use an external store; the Colab filesystem is temporary.

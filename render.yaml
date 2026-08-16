@@ -8,11 +8,11 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "3000"
+      # Render injects $PORT automatically; the server listens on 0.0.0.0:$PORT.
       - key: NEXT_PUBLIC_APP_NAME
-        value: LUNA CLOUD
-      - key: BACKEND_URL
+        value: KYRO CLOUD
+      - key: FRONTEND_URL
+        # Set this to your Vercel frontend URL, e.g. https://kyro-cloud.vercel.app
         sync: false
       - key: AUTH_SECRET
         generateValue: true
@@ -26,3 +26,5 @@ services:
         value: colab
       - key: STREAMING_PROVIDER
         value: webrtc
+      - key: HEARTBEAT_TIMEOUT_MS
+        value: "20000"

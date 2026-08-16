@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid credentials" }, { status: 401 });
   }
   const token = await signSession(user);
-  const res = NextResponse.json({ ok: true, data: { user } });
+  const res = NextResponse.json({ ok: true, data: { user, token } });
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
