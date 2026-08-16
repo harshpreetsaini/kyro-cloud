@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # LUNA CLOUD runtime-agent bootstrap (idempotent).
 # Run inside the Colab runtime. Installs desktop + Selkies WebRTC + agent deps.
+export DEBIAN_FRONTEND=noninteractive
 set -euo pipefail
 
 # Robust defaults. `sudo` strips the environment, so the notebook must invoke this
