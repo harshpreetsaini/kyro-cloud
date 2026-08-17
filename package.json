@@ -8,6 +8,8 @@
     "dev": "node server.mjs",
     "build": "next build",
     "start": "NODE_ENV=production node server.mjs",
+    "backend": "node backend/server.mjs",
+    "backend:dev": "NODE_ENV=development node backend/server.mjs",
     "deploy": "docker compose up --build -d",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",

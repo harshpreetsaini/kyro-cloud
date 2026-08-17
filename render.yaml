@@ -1,19 +1,21 @@
+# Render deployment = BACKEND ONLY (REST API + WebSocket control plane).
+# The Next.js frontend is deployed separately on Vercel.
+# Render does NOT build or serve Next.js — it runs the standalone backend.
 services:
   - type: web
     name: luna-cloud
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.render
     plan: standard
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
       # Render injects $PORT automatically; the server listens on 0.0.0.0:$PORT.
-      - key: NEXT_PUBLIC_APP_NAME
-        value: KYRO CLOUD
       - key: FRONTEND_URL
-        # Set this to your Vercel frontend URL, e.g. https://kyro-cloud.vercel.app
-        sync: false
+        # The Vercel frontend origin. Must be set to your Vercel URL.
+        # CORS on the backend allows only this origin (never "*" with credentials).
+        value: https://kyro-cloud.vercel.app
       - key: AUTH_SECRET
         generateValue: true
       - key: LUNA_USER
@@ -21,6 +23,7 @@ services:
       - key: LUNA_PASSWORD
         sync: false
       - key: RUNTIME_AUTH_SECRET
+        # Shared with the Colab agent via the LUNA_RUNTIME_AUTH Colab secret.
         generateValue: true
       - key: COMPUTE_PROVIDER
         value: colab
