@@ -12,6 +12,7 @@ BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
 RECONNECT = int(os.environ.get("LUNA_RECONNECT", "5"))
 _running = True
+_session_active = False
 
 
 def url() -> str:
@@ -28,8 +29,9 @@ def send(ws, type_: str, payload=None):
 
 def stats_loop(ws):
     while _running:
-        send(ws, "stats", collect_stats())
-        send(ws, "system_info", system_info())
+        if _session_active:
+            send(ws, "stats", collect_stats())
+            send(ws, "system_info", system_info())
         time.sleep(2)
 
 
@@ -39,6 +41,7 @@ def on_open(ws):
 
 
 def on_message(ws, raw):
+    global _session_active
     try:
         msg = json.loads(raw)
     except Exception:
@@ -46,15 +49,18 @@ def on_message(ws, raw):
     t = msg.get("type")
     p = msg.get("payload") or {}
     if t == "prepare_desktop":
+        _session_active = True
         streaming.start_desktop(p.get("display", streaming.DISPLAY))
         send(ws, "desktop_ready", {})
     elif t == "start_stream":
+        _session_active = True
         result = streaming.start_stream(p)
         if result.get("error"):
             send(ws, "error", result)
         else:
             send(ws, "stream_ready", result)
     elif t == "start_vnc":
+        _session_active = True
         result = streaming.start_vnc(p)
         if result.get("error"):
             send(ws, "error", result)
@@ -64,6 +70,7 @@ def on_message(ws, raw):
         streaming.launch_game(p)
         send(ws, "game.started", p)
     elif t == "stop":
+        _session_active = False
         streaming.stop_all()
     elif t == "ping":
         send(ws, "pong", {})

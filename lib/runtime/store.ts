@@ -83,6 +83,10 @@ function connect() {
     switch (event.type) {
       case "runtime.status":
         state = { ...state, session: event.payload as SessionInfo };
+        const st = (event.payload as SessionInfo)?.state;
+        if (st === "OFFLINE" || st === "STOPPED" || st === "DISCONNECTED") {
+          state = { ...state, runningGames: [], stream: null };
+        }
         emit();
         break;
       case "runtime.progress":

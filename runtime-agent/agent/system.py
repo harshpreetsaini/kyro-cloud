@@ -9,21 +9,40 @@ def _run(cmd: str):
         return None
 
 
+def _cpu_model() -> str | None:
+    try:
+        import platform
+
+        m = platform.processor()
+        if m:
+            return m
+    except Exception:
+        pass
+    r = _run("grep -m1 'model name' /proc/cpuinfo")
+    if r and r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip().split(":", 1)[1].strip()
+    return None
+
+
 def detect_gpu() -> dict:
     r = _run(
-        "nvidia-smi --query-gpu=name,memory.total,driver_version,temperature.gpu,utilization.gpu,utilization.memory "
+        "nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version,temperature.gpu,utilization.gpu,utilization.memory "
         "--format=csv,noheader,nounits"
     )
     if r and r.returncode == 0 and r.stdout.strip():
         p = [x.strip() for x in r.stdout.strip().split(",")]
         try:
+            total = int(float(p[1]))
+            used = int(float(p[2])) if p[2] else None
             return {
                 "name": p[0],
-                "vramMb": int(float(p[1])),
-                "driver": p[2],
-                "temperatureC": float(p[3]) if p[3] else None,
-                "utilizationPct": float(p[4]) if p[4] else None,
-                "memoryUtilPct": float(p[5]) if p[5] else None,
+                "vramMb": total,
+                "usedMb": used,
+                "freeMb": (total - used) if used is not None else None,
+                "driver": p[3],
+                "temperatureC": float(p[4]) if p[4] else None,
+                "utilizationPct": float(p[5]) if p[5] else None,
+                "memoryUtilPct": float(p[6]) if p[6] else None,
                 "available": True,
             }
         except Exception:
@@ -35,7 +54,7 @@ def system_info() -> dict:
     gpu = detect_gpu()
     info = {
         "gpu": gpu,
-        "cpu": {"model": None, "cores": os.cpu_count()},
+        "cpu": {"model": _cpu_model(), "cores": os.cpu_count()},
         "ram": {"totalMb": None, "usedMb": None},
         "storage": {"totalMb": None, "usedMb": None, "mounted": False},
         "network": {"pingMs": None, "bitrateMbps": None, "quality": "unknown"},
@@ -71,9 +90,9 @@ def collect_stats() -> dict:
         if gpu.get("available"):
             stats["gpuPct"] = gpu.get("utilizationPct")
             stats["gpuTempC"] = gpu.get("temperatureC")
-            if gpu.get("vramMb"):
-                stats["vramUsedMb"] = int((gpu.get("memoryUtilPct", 0) / 100) * gpu["vramMb"])
-                stats["vramTotalMb"] = gpu["vramMb"]
+            if gpu.get("vramMb") is not None:
+                stats["vramUsedMb"] = gpu.get("usedMb")
+                stats["vramTotalMb"] = gpu.get("vramMb")
     except Exception:
         pass
     return stats

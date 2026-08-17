@@ -4,16 +4,24 @@ export type RuntimeState =
   | "INITIALIZING"
   | "PREPARING"
   | "CONNECTING"
+  | "RUNTIME_CONNECTED"
+  | "GPU_READY"
+  | "DESKTOP_READY"
+  | "STREAM_STARTING"
+  | "STREAM_READY"
   | "ONLINE"
   | "STREAMING"
   | "RECONNECTING"
   | "STOPPING"
+  | "STOPPED"
   | "ERROR"
   | "DISCONNECTED";
 
 export interface GpuInfo {
   name: string | null;
   vramMb: number | null;
+  usedMb: number | null;
+  freeMb: number | null;
   driver: string | null;
   temperatureC: number | null;
   utilizationPct: number | null;
@@ -45,6 +53,7 @@ export interface SystemStats {
   fps: number | null;
   frameTimeMs: number | null;
   latencyMs: number | null;
+  latencySource?: "control" | "webrtc" | "agent" | null;
   bitrateMbps: number | null;
   streaming: boolean;
 }
@@ -116,7 +125,7 @@ export interface ApiResponse<T = unknown> {
 }
 
 export interface SessionInfo {
-  id: string;
+  id: string | null;
   state: RuntimeState;
   startedAt: number | null;
   durationMs: number | null;
@@ -124,6 +133,7 @@ export interface SessionInfo {
   streaming: string;
   simulated: boolean;
   progress: RuntimeProgressStep[];
+  stream?: StreamClientConfig | null;
   error?: string | null;
 }
 

@@ -1,16 +1,47 @@
 "use client";
 
+import { useState } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Button, ProgressList, StatusDot } from "@/components/ui";
 import { deriveStatus } from "@/lib/runtime/status";
 
-const ACTIVE = ["STARTING", "INITIALIZING", "PREPARING", "CONNECTING", "ONLINE", "STREAMING", "ERROR", "DISCONNECTED", "RECONNECTING", "STOPPING"];
+const ACTIVE = [
+  "STARTING", "INITIALIZING", "PREPARING", "CONNECTING",
+  "RUNTIME_CONNECTED", "GPU_READY", "DESKTOP_READY", "STREAM_STARTING", "STREAM_READY",
+  "ONLINE", "STREAMING", "ERROR", "DISCONNECTED", "RECONNECTING", "STOPPING",
+];
 
 export function SessionControls() {
   const { session, start, stop, restart } = useRuntime();
+  const [busy, setBusy] = useState<null | "stop" | "restart" | "start">(null);
   const state = session?.state || "OFFLINE";
   const status = deriveStatus({ connected: true, session });
   const active = ACTIVE.includes(state);
+
+  async function doStop() {
+    setBusy("stop");
+    try {
+      await stop();
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function doRestart() {
+    setBusy("restart");
+    try {
+      await restart();
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function doStart() {
+    setBusy("start");
+    try {
+      await start();
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <div className="panel p-4 flex flex-col gap-4">
@@ -34,14 +65,16 @@ export function SessionControls() {
 
       <div className="flex gap-2">
         {!active ? (
-          <Button onClick={start}>Start Cloud PC</Button>
+          <Button onClick={doStart} disabled={busy === "start"}>
+            {busy === "start" ? "Starting…" : "Start Cloud PC"}
+          </Button>
         ) : (
           <>
-            <Button variant="danger" onClick={stop}>
-              Stop Session
+            <Button variant="danger" onClick={doStop} disabled={busy === "stop"}>
+              {busy === "stop" ? "Stopping…" : "Stop Session"}
             </Button>
-            <Button variant="ghost" onClick={restart}>
-              Restart
+            <Button variant="ghost" onClick={doRestart} disabled={busy === "restart"}>
+              {busy === "restart" ? "Restarting…" : "Restart"}
             </Button>
           </>
         )}
