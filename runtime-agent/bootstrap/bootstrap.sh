@@ -35,7 +35,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get update -y 2>/dev/null || apt-get upd
 sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>/dev/null || dpkg --configure -a || true
 
 echo "[bootstrap] installing desktop environment + VNC (this may take 3-5 minutes)..."
-apt_install xfce4 xvfb tigervnc-standalone-server dbus-x11
+apt_install xfce4 xvfb tigervnc-standalone-server dbus-x11 x11vnc
 # Ensure openbox is available as a lightweight WM fallback
 apt_install openbox
 

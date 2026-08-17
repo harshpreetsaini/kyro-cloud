@@ -6,9 +6,16 @@ import { Button, StateBadge, ProgressList } from "@/components/ui";
 export function SessionControls() {
   const { session, start, stop, restart } = useRuntime();
   const state = session?.state || "OFFLINE";
-  const active = ["STARTING", "INITIALIZING", "PREPARING", "CONNECTING", "ONLINE", "STREAMING"].includes(
-    state
-  );
+  const active = [
+    "STARTING",
+    "INITIALIZING",
+    "PREPARING",
+    "CONNECTING",
+    "ONLINE",
+    "STREAMING",
+    "ERROR",
+    "DISCONNECTED",
+  ].includes(state);
 
   return (
     <div className="panel p-4 flex flex-col gap-4">

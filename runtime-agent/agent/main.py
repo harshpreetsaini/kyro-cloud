@@ -54,6 +54,12 @@ def on_message(ws, raw):
             send(ws, "error", result)
         else:
             send(ws, "stream_ready", result)
+    elif t == "start_vnc":
+        result = streaming.start_vnc(p)
+        if result.get("error"):
+            send(ws, "error", result)
+        else:
+            send(ws, "vnc_ready", result)
     elif t == "launch_game":
         streaming.launch_game(p)
         send(ws, "game.started", p)

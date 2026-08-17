@@ -96,21 +96,21 @@ function parseMultipart(buffer, contentType) {
   return parts;
 }
 
-function getSessionUser(req) {
+async function getSessionUser(req) {
   const auth = req.headers["authorization"];
   if (auth && auth.toLowerCase().startsWith("bearer ")) {
-    return verifySession(auth.slice(7).trim());
+    return await verifySession(auth.slice(7).trim());
   }
   const cookie = req.headers.cookie;
   if (cookie) {
     const m = cookie.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
-    if (m) return verifySession(decodeURIComponent(m[1]));
+    if (m) return await verifySession(decodeURIComponent(m[1]));
   }
   return null;
 }
 
-function requireAuth(req, res) {
-  const user = getSessionUser(req);
+async function requireAuth(req, res) {
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(req, res, 401, { ok: false, error: "Unauthorized" });
     return null;
@@ -147,7 +147,7 @@ async function handleApi(req, res, url) {
   }
 
   // everything else requires auth
-  const user = requireAuth(req, res);
+  const user = await requireAuth(req, res);
   if (!user) return;
 
   const m = getManager();

@@ -28,6 +28,6 @@ services:
       - key: COMPUTE_PROVIDER
         value: colab
       - key: STREAMING_PROVIDER
-        value: webrtc
+        value: vnc
       - key: HEARTBEAT_TIMEOUT_MS
         value: "20000"
