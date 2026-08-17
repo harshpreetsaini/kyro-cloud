@@ -13,6 +13,16 @@ XVFB_PROC = None
 VNC_TUNNEL = None
 
 
+def _display_up(display: str) -> bool:
+    try:
+        num = int(str(display).lstrip(":").split(".")[0])
+        s = socket.create_connection(("127.0.0.1", 6000 + num), timeout=1)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
 def start_desktop(display: str = DISPLAY) -> bool:
     global DESKTOP_PROC, XVFB_PROC
     if DESKTOP_PROC and DESKTOP_PROC.poll() is None:
@@ -23,25 +33,43 @@ def start_desktop(display: str = DISPLAY) -> bool:
 
     # Start Xvfb first (virtual framebuffer) if not already running
     xvfb = os.environ.get("LUNA_XVFB", "Xvfb")
-    xvfb_cmd = [xvfb, display, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"]
-    if XVFB_PROC is None or XVFB_PROC.poll() is not None:
-        try:
-            XVFB_PROC = subprocess.Popen(xvfb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            if XVFB_PROC.poll() is not None:
-                print("[stream] Xvfb exited immediately")
-                return False
-        except FileNotFoundError:
-            print(f"[stream] {xvfb} not found, trying window manager without X server")
-            XVFB_PROC = None
+    if not _display_up(display):
+        xvfb_cmd = [xvfb, display, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"]
+        if XVFB_PROC is None or XVFB_PROC.poll() is not None:
+            try:
+                XVFB_PROC = subprocess.Popen(xvfb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(2)
+                if XVFB_PROC.poll() is not None:
+                    print("[stream] Xvfb exited immediately")
+                    return False
+            except FileNotFoundError:
+                print(f"[stream] {xvfb} not found, trying window manager without X server")
+                XVFB_PROC = None
+    else:
+        print("[stream] X display already up, reusing it")
 
     # Launch a window manager on the virtual display
     env = dict(os.environ, DISPLAY=display)
+    dbus = shutil.which("dbus-launch")
+
+    def launch(cmd):
+        # xfce4 needs a D-Bus session bus to come up cleanly; openbox does not.
+        if dbus and cmd[0] != "openbox":
+            return subprocess.Popen([dbus, *cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     for wm in ("xfce4-session", "openbox", "lxsession", "gnome-session"):
         try:
-            DESKTOP_PROC = subprocess.Popen(wm, env=env)
-            time.sleep(3)
+            DESKTOP_PROC = launch([wm])
+            time.sleep(4)
             if DESKTOP_PROC.poll() is None:
+                # Paint a visible background so the desktop is never pure black.
+                try:
+                    subprocess.Popen(
+                        ["xsetroot", "-solid", "#16161e"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                except Exception:
+                    pass
                 return True
         except FileNotFoundError:
             continue
@@ -108,9 +136,21 @@ def start_vnc(payload=None) -> dict:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(2)
-    if STREAM_PROC.poll() is not None:
-        return {"error": "x11vnc exited (code %s)" % STREAM_PROC.returncode}
+
+    # Wait for x11vnc to actually bind the VNC port before we start pumping,
+    # otherwise noVNC would connect to an empty tunnel and show a black screen.
+    vnc_sock = None
+    for _ in range(40):
+        time.sleep(0.5)
+        if STREAM_PROC.poll() is not None:
+            return {"error": "x11vnc exited (code %s)" % STREAM_PROC.returncode}
+        try:
+            vnc_sock = socket.create_connection(("127.0.0.1", 5901), timeout=2)
+            break
+        except Exception:
+            vnc_sock = None
+    if vnc_sock is None:
+        return {"error": "x11vnc did not open port 5901"}
 
     # Open the outbound tunnel to the backend /vnc endpoint.
     backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
@@ -122,7 +162,7 @@ def start_vnc(payload=None) -> dict:
         return {"error": "VNC tunnel connect failed: %s" % e}
 
     # Pump VNC TCP (127.0.0.1:5901) <-> tunnel WebSocket.
-    s = socket.create_connection(("127.0.0.1", 5901))
+    s = vnc_sock
     def vnc_to_ws():
         try:
             while True:
