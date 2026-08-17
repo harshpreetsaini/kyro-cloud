@@ -1,18 +1,49 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { RemoteDesktop } from "@/components/RemoteDesktop";
-import { PerfOverlay } from "@/components/PerfOverlay";
+import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Button } from "@/components/ui";
+import { fmt } from "@/components/ui";
+
+function HUD() {
+  const { stats, stream } = useRuntime();
+  const items = [
+    ["FPS", stats?.fps != null ? String(Math.round(stats.fps)) : "--"],
+    ["GPU", stats?.gpuPct != null ? `${Math.round(stats.gpuPct)}%` : "--"],
+    ["VRAM", stats?.vramUsedMb != null ? `${Math.round(stats.vramUsedMb)}MB` : "--"],
+    ["RES", stream?.resolution || "--"],
+    ["LAT", stats?.latencyMs != null ? `${Math.round(stats.latencyMs)}ms` : "--"],
+  ];
+  return (
+    <div className="absolute top-3 left-1/2 -translate-x-1/2 panel px-3 py-1.5 mono text-[11px] flex gap-3 z-30 pointer-events-none">
+      {items.map(([k, v]) => (
+        <span key={k} className="flex gap-1">
+          <span className="text-muted">{k}</span>
+          <span className="text-accent">{v}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export default function SessionPage() {
-  const [overlay, setOverlay] = useState(false);
   const [controls, setControls] = useState(true);
+  const [hud, setHud] = useState(true);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function reveal() {
+    setControls(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setControls(false), 3000);
+  }
 
   useEffect(() => {
-    const t = setTimeout(() => setControls(false), 4000);
-    return () => clearTimeout(t);
+    reveal();
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
 
   function goFullscreen() {
@@ -20,20 +51,29 @@ export default function SessionPage() {
   }
 
   return (
-    <div className="fixed inset-0 bg-black z-40" onMouseMove={() => setControls(true)}>
+    <div
+      className="fixed inset-0 bg-black z-40 select-none"
+      onMouseMove={reveal}
+    >
       <RemoteDesktop className="absolute inset-0" />
-      <PerfOverlay visible={overlay} />
+      {hud && <HUD />}
+
       {controls && (
-        <div className="absolute top-3 right-3 flex gap-2 z-50 animate-fade-in">
-          <Button variant="ghost" className="!py-1 !px-3 text-xs" onClick={() => setOverlay((v) => !v)}>
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-50 animate-fade-in">
+          <Button variant="ghost" className="!py-1.5 !px-3 text-xs" onClick={() => setHud((v) => !v)}>
             Performance
           </Button>
-          <Button variant="ghost" className="!py-1 !px-3 text-xs" onClick={goFullscreen}>
+          <Button variant="ghost" className="!py-1.5 !px-3 text-xs" onClick={goFullscreen}>
             Fullscreen
           </Button>
+          <Link href="/desktop">
+            <Button variant="ghost" className="!py-1.5 !px-3 text-xs">
+              Desktop
+            </Button>
+          </Link>
           <Link href="/dashboard">
-            <Button variant="danger" className="!py-1 !px-3 text-xs">
-              Exit
+            <Button variant="danger" className="!py-1.5 !px-3 text-xs">
+              Exit Game
             </Button>
           </Link>
         </div>

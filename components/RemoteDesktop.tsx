@@ -37,8 +37,10 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
 
   if (!stream) {
     return (
-      <div className={`flex items-center justify-center bg-black/60 text-muted text-sm ${className}`}>
-        No active stream. Start a session to see your desktop.
+      <div className={`flex flex-col items-center justify-center bg-black/60 text-center gap-2 text-muted text-sm px-6 ${className}`}>
+        <div className="w-12 h-12 rounded-2xl bg-secondary flex items-center justify-center text-xl">▣</div>
+        <p className="font-medium text-text">No active cloud session</p>
+        <p className="max-w-xs">Start your Cloud PC to access your remote desktop.</p>
       </div>
     );
   }

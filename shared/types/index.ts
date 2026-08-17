@@ -73,6 +73,8 @@ export interface GameEntry {
   compatibility: Compatibility;
   installed: boolean;
   lastPlayed?: string | null;
+  running?: boolean;
+  installState?: "idle" | "installing" | "updating";
 }
 
 export interface FileItem {

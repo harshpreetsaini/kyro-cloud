@@ -32,8 +32,18 @@ export function Terminal() {
 
   return (
     <div className="panel flex flex-col h-[70vh] min-h-[360px] overflow-hidden">
+      <div className="px-3 py-2 border-b border-white/5 text-xs uppercase tracking-wider text-muted flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-success" /> Terminal
+      </div>
       <div ref={outRef} className="flex-1 overflow-auto mono text-[13px] p-3 whitespace-pre-wrap text-[#c8d0e0]">
-        {output || "Connecting to runtime shell…"}
+        {output ? (
+          output
+        ) : (
+          <span className="flex items-center gap-2 text-muted">
+            <span className="w-3 h-3 rounded-full border-2 border-muted/40 border-t-accent animate-spin" /> Connecting
+            to runtime shell…
+          </span>
+        )}
       </div>
       <form onSubmit={send} className="flex border-t border-white/5">
         <span className="px-3 py-2 mono text-accent">$</span>

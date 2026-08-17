@@ -16,6 +16,7 @@ interface RuntimeState {
   stream: StreamClientConfig | null;
   notifications: Notification[];
   statsHistory: SystemStats[];
+  runningGames: string[];
 }
 
 const EMPTY: RuntimeState = {
@@ -26,6 +27,7 @@ const EMPTY: RuntimeState = {
   stream: null,
   notifications: [],
   statsHistory: [],
+  runningGames: [],
 };
 
 let state: RuntimeState = EMPTY;
@@ -114,6 +116,20 @@ function connect() {
           (event.payload as { level: Notification["level"] }).level
         );
         break;
+      case "game.started": {
+        const p = event.payload as any;
+        const ids: string[] = Array.isArray(p) ? p.map((g: any) => g.id) : p?.id ? [p.id] : [];
+        state = { ...state, runningGames: Array.from(new Set([...state.runningGames, ...ids])) };
+        emit();
+        break;
+      }
+      case "game.stopped":
+        state = {
+          ...state,
+          runningGames: state.runningGames.filter((id) => id !== (event.payload as { id: string }).id),
+        };
+        emit();
+        break;
       default:
         break;
     }
@@ -134,6 +150,17 @@ export function runtimeLaunchGame(id: string) {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader() },
     body: JSON.stringify({ id }),
+  });
+}
+
+export function runtimeStopGame(id: string) {
+  fetch(api("/api/games/stop"), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeader() },
+    body: JSON.stringify({ id }),
+  }).then(() => {
+    state = { ...state, runningGames: state.runningGames.filter((g) => g !== id) };
+    emit();
   });
 }
 

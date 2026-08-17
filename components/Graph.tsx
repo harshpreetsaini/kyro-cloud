@@ -28,15 +28,20 @@ export function Graph({
   unit?: string;
 }) {
   const current = values.length ? values[values.length - 1] : null;
+  const hasData = values.length >= 2;
   return (
     <div className="panel p-3">
       <div className="flex justify-between text-xs mb-1">
         <span className="text-muted">{title}</span>
         <span className="mono">{current == null ? "--" : `${Math.round(current)}${unit}`}</span>
       </div>
-      <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="w-full h-10">
-        <path d={buildPath(values, 100, 30)} fill="none" stroke={color} strokeWidth={1.5} />
-      </svg>
+      {hasData ? (
+        <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="w-full h-10">
+          <path d={buildPath(values, 100, 30)} fill="none" stroke={color} strokeWidth={1.5} />
+        </svg>
+      ) : (
+        <div className="h-10 flex items-center justify-center text-[11px] text-muted/60">No data</div>
+      )}
     </div>
   );
 }
