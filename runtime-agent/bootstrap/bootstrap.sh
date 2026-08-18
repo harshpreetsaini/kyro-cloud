@@ -161,7 +161,19 @@ done
 
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..."
 cd "$AGENT_DIR/agent"
-nohup python3 main.py > /tmp/luna-agent.log 2>&1 & \
-  echo "[bootstrap] agent started in background (PID $!)"
+# `setsid` detaches the agent into its own session/process group so Colab cannot
+# reap it when this bootstrap cell finishes (a plain `nohup ... &` still gets
+# killed with the cell's process group). stdin is redirected from /dev/null so
+# the agent never blocks on the terminal.
+nohup setsid python3 main.py > /tmp/luna-agent.log 2>&1 < /dev/null &
+AGENT_PID=$!
+echo "[bootstrap] agent started in background (PID $AGENT_PID)"
+# Confirm it survived the fork before we declare success.
+sleep 2
+if kill -0 "$AGENT_PID" 2>/dev/null; then
+  echo "[bootstrap] agent is running."
+else
+  echo "[bootstrap] WARNING: agent did not stay up — see /tmp/luna-agent.log"
+fi
 
-echo "[bootstrap] done. Tail logs: !tail -f /tmp/luna-agent.log"
+echo "[bootstrap] done. Tail logs: !tail -n 80 /tmp/luna-agent.log"
