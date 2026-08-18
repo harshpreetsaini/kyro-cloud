@@ -5,14 +5,13 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Button, ProgressList, EmptyState, Badge, Spinner } from "@/components/ui";
 import type { RuntimeState } from "@shared/types";
 
-export type CloudPhase = "offline" | "starting" | "error" | "online";
+export type CloudPhase = "offline" | "ready" | "starting" | "error" | "online";
 
 const STARTING: RuntimeState[] = [
   "STARTING",
   "INITIALIZING",
   "PREPARING",
   "CONNECTING",
-  "RUNTIME_CONNECTED",
   "GPU_READY",
   "DESKTOP_READY",
   "STREAM_STARTING",
@@ -26,8 +25,9 @@ export function useCloudPhase(): CloudPhase {
   const state = session?.state;
   if (state === "ERROR") return "error";
   if (state === "ONLINE" || state === "STREAMING") return "online";
+  // RUNTIME_CONNECTED = agent attached but session not started yet -> show Start
+  if (state === "RUNTIME_CONNECTED") return "ready";
   if (state && STARTING.includes(state)) return "starting";
-  if (connected) return "starting";
   return "offline";
 }
 
@@ -47,6 +47,17 @@ export function OfflineHero() {
       title="YOUR CLOUD PC IS OFFLINE"
       description="Start your GPU session to access your remote desktop and games."
       action={<StartCloudButton />}
+    />
+  );
+}
+
+export function ReadyHero() {
+  return (
+    <EmptyState
+      icon="⏻"
+      title="YOUR CLOUD PC IS READY"
+      description="Your Colab GPU runtime is connected. Start the Cloud PC to launch the desktop, games and apps."
+      action={<StartCloudButton label="Start Cloud PC" />}
     />
   );
 }

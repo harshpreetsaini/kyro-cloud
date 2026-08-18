@@ -4,7 +4,7 @@ import { useState } from "react";
 import { RemoteDesktop } from "@/components/RemoteDesktop";
 import { PerfOverlay } from "@/components/PerfOverlay";
 import { Button } from "@/components/ui";
-import { useCloudPhase, OfflineHero, StartingHero, ErrorHero } from "@/components/CloudStates";
+import { useCloudPhase, OfflineHero, ReadyHero, StartingHero, ErrorHero } from "@/components/CloudStates";
 
 export default function DesktopPage() {
   const [overlay, setOverlay] = useState(false);
@@ -16,6 +16,7 @@ export default function DesktopPage() {
         <h2 className="font-display text-xl">Remote Desktop</h2>
         <div className="panel flex-1 min-h-[360px] flex flex-col">
           {phase === "offline" && <OfflineHero />}
+          {phase === "ready" && <ReadyHero />}
           {phase === "starting" && <StartingHero />}
           {phase === "error" && <ErrorHero />}
         </div>

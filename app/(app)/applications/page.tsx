@@ -12,7 +12,8 @@ interface StaticApp extends AppEntry {
 
 const STATIC: StaticApp[] = [
   { id: "steam", name: "Steam", category: "game-store", note: "Game launcher", supported: true },
-  { id: "epic", name: "Epic Games", category: "game-store", note: "Epic Games has no native Linux client; requires Wine/Proton which is not provisioned.", supported: false },
+  { id: "epic", name: "Epic Games", category: "game-store", note: "Epic Games / GOG via the Heroic Games Launcher.", supported: true },
+  { id: "lutris", name: "Lutris", category: "game-store", note: "Game launcher for Epic, GOG, Battle.net and more.", supported: true },
   { id: "firefox", name: "Firefox", category: "browser", note: "Web browser" },
   { id: "terminal", name: "Terminal", category: "system", note: "Shell access", to: "/terminal" },
   { id: "files", name: "File Manager", category: "system", note: "Browse files", to: "/files" },

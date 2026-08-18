@@ -7,7 +7,7 @@ import { SessionControls } from "@/components/SessionControls";
 import { PerfOverlay } from "@/components/PerfOverlay";
 import { Button, Card } from "@/components/ui";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
-import { useCloudPhase, OfflineHero, StartingHero, ErrorHero } from "@/components/CloudStates";
+import { useCloudPhase, OfflineHero, ReadyHero, StartingHero, ErrorHero } from "@/components/CloudStates";
 
 function OfflineStats() {
   const items = ["GPU", "CPU", "RAM", "STORAGE"];
@@ -41,6 +41,13 @@ export default function DashboardPage() {
       {phase === "offline" && (
         <div className="panel flex flex-col gap-4">
           <OfflineHero />
+          <OfflineStats />
+        </div>
+      )}
+
+      {phase === "ready" && (
+        <div className="panel flex flex-col gap-4">
+          <ReadyHero />
           <OfflineStats />
         </div>
       )}

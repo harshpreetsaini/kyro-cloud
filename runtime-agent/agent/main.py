@@ -38,9 +38,10 @@ def agent_send(type_: str, payload=None):
 
 def stats_loop(ws):
     while _running:
-        if _session_active:
-            send(ws, "stats", collect_stats())
-            send(ws, "system_info", system_info())
+        # Send telemetry whenever the backend is connected so the Control panel
+        # always reflects the real Colab hardware (CPU/GPU/RAM/Storage/network).
+        send(ws, "stats", collect_stats())
+        send(ws, "system_info", system_info())
         time.sleep(2)
 
 
