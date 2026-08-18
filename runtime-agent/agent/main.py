@@ -46,9 +46,26 @@ def stats_loop(ws):
         time.sleep(2)
 
 
+def _cleanup_stale():
+    """Kill leftover processes from a previous agent run (x11vnc, GStreamer,
+    zombie window managers, orphaned bash shells).  Best-effort — never raises."""
+    import subprocess as _sp
+    for pat in ("x11vnc", "gst-launch-1.0", "selkies-gstreamer"):
+        try:
+            _sp.run(["pkill", "-f", pat], timeout=5, capture_output=True)
+        except Exception:
+            pass
+    # Kill stale bash shells started by a previous agent (but not the current one).
+    try:
+        _sp.run(["pkill", "-f", "bash --login"], timeout=5, capture_output=True)
+    except Exception:
+        pass
+
+
 def on_open(ws):
     global _ws
     _ws = ws
+    _cleanup_stale()
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
     send(ws, "app.list", apps.detect_apps())
     threading.Thread(target=stats_loop, args=(ws,), daemon=True).start()
@@ -101,6 +118,13 @@ def on_message(ws, raw):
             result = {"ok": False, "error": f"start_vnc crashed: {ex}"}
         # Always reply (with ok or a real error) so the backend never hangs waiting.
         send(ws, "vnc_ready", result)
+    elif t == "start_gstreamer":
+        _session_active = True
+        try:
+            result = streaming.start_gstreamer(p)
+        except Exception as ex:
+            result = {"ok": False, "error": f"start_gstreamer crashed: {ex}"}
+        send(ws, "gst_ready", result)
     elif t == "launch_game":
         streaming.launch_game(p)
         send(ws, "game.started", p)
@@ -141,9 +165,14 @@ def on_message(ws, raw):
         _session_active = False
         streaming.stop_all()
         apps.stop_all()
-        for ch_id, proc in list(_terminal_procs.items()):
+        for ch_id, rec in list(_terminal_procs.items()):
             try:
-                proc.terminate()
+                fd = rec.get("fd") if isinstance(rec, dict) else None
+                proc = rec.get("proc") if isinstance(rec, dict) else rec
+                if fd is not None:
+                    os.close(fd)
+                if proc:
+                    proc.terminate()
             except Exception:
                 pass
         _terminal_procs.clear()
@@ -152,36 +181,56 @@ def on_message(ws, raw):
 
 
 def _terminal_start(p):
-    """Start an interactive shell session on Colab for a terminal channel."""
+    """Start an interactive shell session on Colab for a terminal channel.
+
+    Uses a PTY so bash behaves as if attached to a real terminal (prompts,
+    line editing, job control).  Output is read from the master fd and
+    forwarded to the browser.
+    """
     channel_id = p.get("channelId", "default")
     cwd = p.get("cwd", "/root")
     import subprocess as _sp
+    import pty
+    import select
+    import fcntl
     try:
+        master_fd, slave_fd = pty.openpty()
         proc = _sp.Popen(
-            [os.environ.get("SHELL", "/bin/bash")],
-            stdin=_sp.PIPE,
-            stdout=_sp.PIPE,
-            stderr=_sp.PIPE,
+            [os.environ.get("SHELL", "/bin/bash"), "--login"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
             cwd=cwd,
-            env=dict(os.environ, TERM="xterm-256color"),
+            env=dict(os.environ, TERM="xterm-256color", SHELL="/bin/bash"),
+            close_fds=True,
         )
-        _terminal_procs[channel_id] = proc
+        os.close(slave_fd)
+        # Set master_fd non-blocking so reads don't hang the thread.
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        _terminal_procs[channel_id] = {"proc": proc, "fd": master_fd}
 
-        def _reader(f, stream_type):
+        def _read_pty():
+            """Read from the PTY master and forward to the browser."""
             try:
-                while True:
-                    chunk = f.read(4096)
-                    if not chunk:
+                while proc.poll() is None:
+                    try:
+                        r, _, _ = select.select([master_fd], [], [], 0.1)
+                        if r:
+                            data = os.read(master_fd, 8192)
+                            if data:
+                                agent_send("terminal.output", {
+                                    "channelId": channel_id,
+                                    "stdout": data.decode(errors="replace"),
+                                })
+                            else:
+                                break
+                    except (OSError, ValueError):
                         break
-                    agent_send("terminal.output", {
-                        "channelId": channel_id,
-                        stream_type: chunk.decode(errors="replace"),
-                    })
             except Exception:
                 pass
 
-        threading.Thread(target=_reader, args=(proc.stdout, "stdout"), daemon=True).start()
-        threading.Thread(target=_reader, args=(proc.stderr, "stderr"), daemon=True).start()
+        threading.Thread(target=_read_pty, daemon=True).start()
         agent_send("terminal.started", {"channelId": channel_id, "ok": True})
     except Exception as e:
         agent_send("terminal.started", {"channelId": channel_id, "ok": False, "error": str(e)})
@@ -191,11 +240,18 @@ def _terminal_input(p):
     """Write input to a running terminal channel on Colab."""
     channel_id = p.get("channelId", "default")
     data = p.get("data", "")
-    proc = _terminal_procs.get(channel_id)
+    rec = _terminal_procs.get(channel_id)
+    if not rec:
+        return
+    proc = rec.get("proc") if isinstance(rec, dict) else rec
+    fd = rec.get("fd") if isinstance(rec, dict) else None
     if proc and proc.poll() is None:
         try:
-            proc.stdin.write(data.encode())
-            proc.stdin.flush()
+            if fd is not None:
+                os.write(fd, data.encode())
+            elif proc.stdin:
+                proc.stdin.write(data.encode())
+                proc.stdin.flush()
         except Exception:
             pass
 
@@ -203,7 +259,16 @@ def _terminal_input(p):
 def _terminal_stop(p):
     """Stop a running terminal channel on Colab."""
     channel_id = p.get("channelId", "default")
-    proc = _terminal_procs.pop(channel_id, None)
+    rec = _terminal_procs.pop(channel_id, None)
+    if not rec:
+        return
+    proc = rec.get("proc") if isinstance(rec, dict) else rec
+    fd = rec.get("fd") if isinstance(rec, dict) else None
+    if fd is not None:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
     if proc:
         try:
             proc.terminate()

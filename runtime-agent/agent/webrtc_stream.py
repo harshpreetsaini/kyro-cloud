@@ -128,8 +128,8 @@ async def _negotiate(loop, pc, signaling):
 
 def _inject_input(msg):
     """Translate browser input (over the WebRTC data channel) into X input
-    events via xdotool. Coordinates are approximate (client pixels)."""
-    import subprocess
+    events via xdotool.  Uses a persistent xdotool process with stdin pipe
+    to avoid the cost of forking a new process per event."""
     import json
     import os
 
@@ -147,25 +147,39 @@ def _inject_input(msg):
     xdo = shutil.which("xdotool")
     if not xdo:
         return
+
+    # Lazy-init: keep a single xdotool process alive for all events.
+    proc = getattr(_inject_input, "_proc", None)
+    if proc is None or proc.poll() is not None:
+        proc = subprocess.Popen(
+            [xdo, "-"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+        _inject_input._proc = proc
+
     t = msg.get("t")
-
-    def run(args):
-        subprocess.Popen([xdo, *args], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    if t == "mmove":
-        run(["mousemove", str(int(msg.get("x", 0))), str(int(msg.get("y", 0)))])
-    elif t == "mdown":
-        btn = {0: "1", 1: "2", 2: "3"}.get(msg.get("b", 0), "1")
-        run(["mousedown", btn])
-    elif t == "mup":
-        btn = {0: "1", 1: "2", 2: "3"}.get(msg.get("b", 0), "1")
-        run(["mouseup", btn])
-    elif t == "wheel":
-        run(["click", "4" if msg.get("d", 0) < 0 else "5"])
-    elif t in ("kdown", "kup"):
-        key = _xkey(msg.get("k"), msg.get("code"))
-        if key:
-            run([("keydown" if t == "kdown" else "keyup"), key])
+    try:
+        if t == "mmove":
+            proc.stdin.write(f"mousemove {int(msg.get('x', 0))} {int(msg.get('y', 0))}\n".encode())
+        elif t == "mdown":
+            btn = {0: "1", 1: "2", 2: "3"}.get(msg.get("b", 0), "1")
+            proc.stdin.write(f"mousedown {btn}\n".encode())
+        elif t == "mup":
+            btn = {0: "1", 1: "2", 2: "3"}.get(msg.get("b", 0), "1")
+            proc.stdin.write(f"mouseup {btn}\n".encode())
+        elif t == "wheel":
+            proc.stdin.write(f"click {'4' if msg.get('d', 0) < 0 else '5'}\n".encode())
+        elif t in ("kdown", "kup"):
+            key = _xkey(msg.get("k"), msg.get("code"))
+            if key:
+                proc.stdin.write(f"{'keydown' if t == 'kdown' else 'keyup'} {key}\n".encode())
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        # Process died — will be recreated on next event.
+        _inject_input._proc = None
 
 
 def _xkey(k, code):

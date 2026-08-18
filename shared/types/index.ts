@@ -61,7 +61,7 @@ export interface SystemStats {
   netState?: string | null;
 }
 
-export type StreamType = "vnc" | "webrtc";
+export type StreamType = "vnc" | "webrtc" | "gstreamer";
 
 export interface StreamClientConfig {
   type: StreamType;

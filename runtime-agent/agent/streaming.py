@@ -4,6 +4,7 @@ import time
 import threading
 import socket
 import shutil
+import json
 import websocket
 
 DISPLAY = os.environ.get("LUNA_DISPLAY", ":1")
@@ -11,6 +12,10 @@ DESKTOP_PROC = None
 STREAM_PROC = None
 XVFB_PROC = None
 VNC_TUNNEL = None
+_GSTREAMER_proc = None
+_gstreamer_fps = 0
+_gstreamer_frame_count = 0
+_gstreamer_last_fps_time = 0
 
 
 def _display_up(display: str) -> bool:
@@ -24,6 +29,12 @@ def _display_up(display: str) -> bool:
 
 
 def start_desktop(display: str = DISPLAY) -> bool:
+    """Start Xvfb and optionally a window manager.
+
+    In headless mode (for cloud gaming), a WM is *optional* — apps render
+    directly on the Xvfb framebuffer.  The function returns True as long as
+    Xvfb is up, even when no WM could be started.
+    """
     global DESKTOP_PROC, XVFB_PROC
     if DESKTOP_PROC and DESKTOP_PROC.poll() is None:
         return True
@@ -43,40 +54,48 @@ def start_desktop(display: str = DISPLAY) -> bool:
                     print("[stream] Xvfb exited immediately")
                     return False
             except FileNotFoundError:
-                print(f"[stream] {xvfb} not found, trying window manager without X server")
+                print(f"[stream] {xvfb} not found")
                 XVFB_PROC = None
                 return False
     else:
         print("[stream] X display already up, reusing it")
 
-    # Launch a window manager on the virtual display
+    # Try to launch a window manager, but do NOT fail if none are available —
+    # headless cloud gaming works without a WM (apps render directly on Xvfb).
     env = dict(os.environ, DISPLAY=display)
     dbus = shutil.which("dbus-launch")
 
     def launch(cmd):
-        # xfce4 needs a D-Bus session bus to come up cleanly; openbox does not.
         if dbus and cmd[0] != "openbox":
             return subprocess.Popen([dbus, *cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    for wm in ("xfce4-session", "openbox", "lxsession", "gnome-session"):
+    wm_started = False
+    for wm in ("openbox", "xfce4-session", "lxsession", "gnome-session"):
         try:
             DESKTOP_PROC = launch([wm])
-            time.sleep(4)
+            time.sleep(3)
             if DESKTOP_PROC.poll() is None:
-                # Paint a visible background so the desktop is never pure black.
-                try:
-                    wp = "/usr/share/backgrounds/luna-cloud.png"
-                    if os.path.exists(wp) and shutil.which("feh"):
-                        subprocess.Popen(["feh", "--bg-scale", wp], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        subprocess.Popen(["xsetroot", "-solid", "#16161e"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except Exception:
-                    pass
-                return True
+                wm_started = True
+                print(f"[stream] window manager {wm} started")
+                break
         except FileNotFoundError:
             continue
-    return False
+
+    if not wm_started:
+        print("[stream] no window manager available — headless mode (apps render directly)")
+
+    # Paint a visible background so the desktop is never pure black.
+    try:
+        wp = "/usr/share/backgrounds/luna-cloud.png"
+        if os.path.exists(wp) and shutil.which("feh"):
+            subprocess.Popen(["feh", "--bg-scale", wp], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["xsetroot", "-solid", "#16161e"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    return True
 
 
 def start_stream(payload: dict) -> dict:
@@ -211,17 +230,199 @@ def start_vnc(payload=None) -> dict:
     return {"ok": True}
 
 
+def _detect_encoder():
+    """Detect the best available H.264 encoder.  Returns (encoder_element, needs_parse)."""
+    # Try NVENC first (GPU hardware encoding — lowest latency).
+    for enc in ("nvh264enc", "nvh264enc"):
+        try:
+            r = subprocess.run(
+                ["gst-inspect-1.0", enc], capture_output=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return enc, True
+        except Exception:
+            pass
+    # Try VAAPI (AMD/Intel GPU).
+    try:
+        r = subprocess.run(["gst-inspect-1.0", "vaapih264enc"], capture_output=True, timeout=5)
+        if r.returncode == 0:
+            return "vaapih264enc", True
+    except Exception:
+        pass
+    # Fall back to x264enc (CPU software encoding — still much faster than x11vnc RFB).
+    try:
+        r = subprocess.run(["gst-inspect-1.0", "x264enc"], capture_output=True, timeout=5)
+        if r.returncode == 0:
+            return "x264enc", True
+    except Exception:
+        pass
+    return None, False
+
+
+def _start_audio_capture(ws_tunnel):
+    """Capture audio from PulseAudio and send Opus-encoded frames over the WebSocket.
+
+    Audio packets are prefixed with 0x01 to distinguish them from video (0x00).
+    Runs in a daemon thread — best effort, never raises."""
+    def _audio_thread():
+        try:
+            proc = subprocess.Popen(
+                [
+                    "gst-launch-1.0", "-e",
+                    "pulsesrc",
+                    "!", "audio/x-raw,channels=2,rate=48000",
+                    "!", "opusenc", "bitrate=128000", "complexity=0",
+                    "!", "oggmux",
+                    "!", "fdsink", "sync=false",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            while True:
+                data = proc.stdout.read(4096)
+                if not data:
+                    break
+                if ws_tunnel:
+                    ws_tunnel.send(b"\x01" + data)
+        except Exception:
+            pass
+
+    threading.Thread(target=_audio_thread, daemon=True).start()
+
+
+def start_gstreamer(payload=None) -> dict:
+    """Start GPU-accelerated streaming via GStreamer.
+
+    Captures the Xvfb display with ``ximagesrc``, encodes with NVENC (or
+    software x264enc as fallback), and tunnels the raw H.264 bitstream to
+    the backend over the agent's outbound WebSocket.  The browser decodes
+    with WebCodecs — far lower latency than x11vnc + noVNC.
+
+    Falls back to ``start_vnc()`` if GStreamer or a suitable encoder is
+    unavailable.
+    """
+    global _GSTREAMER_proc, VNC_TUNNEL, STREAM_PROC
+
+    if not start_desktop():
+        return {"ok": False, "error": "desktop environment failed to start"}
+
+    encoder, needs_parse = _detect_encoder()
+    if encoder is None:
+        print("[stream] no GStreamer H.264 encoder found — falling back to VNC")
+        return start_vnc(payload)
+
+    payload = payload or {}
+    fps = payload.get("fps", 60)
+    width = payload.get("width", 1920)
+    height = payload.get("height", 1080)
+
+    # Build the GStreamer pipeline.
+    # Output: raw H.264 Annex-B byte stream to stdout (fdsink).
+    enc_props = "bitrate=8000 tune=zerolatency" if "nv" in encoder else "speed-preset=ultrafast tune=zerolatency"
+    pipeline = (
+        f"gst-launch-1.0 -e "
+        f"ximagesrc display-name={DISPLAY} use-damage=false "
+        f"! video/x-raw,framerate={fps}/1 "
+        f"! videoconvert "
+        f"! video/x-raw,format=I420,width={width},height={height} "
+        f"! {encoder} {enc_props} key-int-max={fps * 2} "
+        f"! video/x-h264,stream-format=byte-stream,profile=baseline "
+        f"! h264parse "
+        f"! fdsink sync=false"
+    )
+
+    print(f"[stream] GStreamer pipeline: {pipeline}")
+    try:
+        _GSTREAMER_proc = subprocess.Popen(
+            pipeline.split(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except Exception as e:
+        print(f"[stream] GStreamer failed to start: {e} — falling back to VNC")
+        return start_vnc(payload)
+
+    # Wait a moment for the pipeline to start producing frames.
+    time.sleep(1)
+    if _GSTREAMER_proc.poll() is not None:
+        err = _GSTREAMER_proc.stderr.read().decode(errors="replace")[:500]
+        print(f"[stream] GStreamer exited immediately: {err} — falling back to VNC")
+        return start_vnc(payload)
+
+    # Open the outbound tunnel to the backend /vnc endpoint.
+    backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
+    token = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+    ws_url = "%s?token=%s" % (backend, token)
+    try:
+        VNC_TUNNEL = websocket.create_connection(ws_url, timeout=15)
+    except Exception as e:
+        _GSTREAMER_proc.terminate()
+        _GSTREAMER_proc = None
+        return {"ok": False, "error": "GStreamer tunnel connect failed: %s" % e}
+
+    # Signal the backend that this is a raw H.264 stream (not VNC RFB).
+    try:
+        VNC_TUNNEL.send(json.dumps({"type": "gst-init", "encoder": encoder, "fps": fps, "width": width, "height": height}))
+    except Exception:
+        pass
+
+    STREAM_PROC = _GSTREAMER_proc
+
+    def _gst_to_ws():
+        """Read encoded H.264 frames from GStreamer stdout and send over WebSocket."""
+        global _gstreamer_fps, _gstreamer_frame_count, _gstreamer_last_fps_time
+        _gstreamer_last_fps_time = time.time()
+        _gstreamer_frame_count = 0
+        try:
+            while True:
+                data = _GSTREAMER_proc.stdout.read(65536)
+                if not data:
+                    break
+                _gstreamer_frame_count += 1
+                # Calculate FPS every second.
+                now = time.time()
+                if now - _gstreamer_last_fps_time >= 1.0:
+                    _gstreamer_fps = _gstreamer_frame_count / (now - _gstreamer_last_fps_time)
+                    _gstreamer_frame_count = 0
+                    _gstreamer_last_fps_time = now
+                if VNC_TUNNEL:
+                    # Prefix with 0x00 to mark as video data.
+                    VNC_TUNNEL.send(b"\x00" + data)
+        except Exception:
+            pass
+
+    def _gst_stderr():
+        """Drain GStreamer stderr to prevent blocking."""
+        try:
+            while True:
+                line = _GSTREAMER_proc.stderr.readline()
+                if not line:
+                    break
+        except Exception:
+            pass
+
+    threading.Thread(target=_gst_to_ws, daemon=True).start()
+    threading.Thread(target=_gst_stderr, daemon=True).start()
+
+    # Start audio capture in a separate thread.
+    _start_audio_capture(VNC_TUNNEL)
+
+    print("[stream] GStreamer GPU streaming started (NVENC/x264)")
+    return {"ok": True, "encoder": encoder, "mode": "gstreamer"}
+
+
 def stop_all() -> None:
-    global VNC_TUNNEL
+    global VNC_TUNNEL, _GSTREAMER_proc
     if VNC_TUNNEL:
         try:
             VNC_TUNNEL.close()
         except Exception:
             pass
         VNC_TUNNEL = None
-    for p in (STREAM_PROC, DESKTOP_PROC, XVFB_PROC):
+    for p in (STREAM_PROC, DESKTOP_PROC, XVFB_PROC, _GSTREAMER_proc):
         try:
             if p:
                 p.terminate()
         except Exception:
             pass
+    _GSTREAMER_proc = None

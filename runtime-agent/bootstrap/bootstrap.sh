@@ -111,10 +111,22 @@ install_steam() {
 }
 install_steam
 
-echo "[bootstrap] installing GStreamer + X11 capture (for WebRTC encode, best-effort)..."
+echo "[bootstrap] installing GStreamer + GPU encoding (NVENC) + X11 capture..."
 apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libx11-dev xauth \
-  mesa-vulkan-drivers vulkan-tools libvulkan1 libegl1 mesa-utils xdg-utils pulseaudio-utils
+  mesa-vulkan-drivers vulkan-tools libvulkan1 libegl1 mesa-utils xdg-utils \
+  pulseaudio-utils pulseaudio
+
+# Try to install the NVENC GStreamer plugin (hardware GPU encoding).
+# On Colab (Ubuntu 22.04) this is often gstreamer1.0-nvenc or available via
+# the NVIDIA driver package.  If not available, GStreamer will fall back to
+# x264enc (software) which still beats x11vnc's RFB protocol.
+apt_install gstreamer1.0-nvenc 2>/dev/null \
+  || apt_install libgstreamer-plugins-bad1.0-dev 2>/dev/null \
+  || echo "[bootstrap] NVENC GStreamer plugin not in apt (will use software fallback or existing driver)"
+
+# Ensure PulseAudio is running for audio capture.
+pulseaudio --start --exit-idle-time=-1 2>/dev/null || true
 
 echo "[bootstrap] installing Lutris..."
 apt_install lutris 2>/dev/null || echo "[warn] lutris not installed"
@@ -156,13 +168,23 @@ except Exception as e:
 PY
 
 echo "[bootstrap] verifying installed components:"
-for b in Xvfb x11vnc openbox xfce4-session xterm firefox steam lutris heroic feh; do
+for b in Xvfb x11vnc openbox xfce4-session xterm firefox steam lutris heroic feh gst-launch-1.0; do
   if command -v "$b" >/dev/null 2>&1; then
     echo "  [OK]   $b -> $(command -v $b)"
   else
     echo "  [MISS] $b"
   fi
 done
+
+# Verify GStreamer encoding capabilities (NVENC vs software fallback).
+echo "[bootstrap] GStreamer encoding check:"
+if gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
+  echo "  [OK]   nvh264enc (NVENC GPU encoding available)"
+elif gst-inspect-1.0 x264enc >/dev/null 2>&1; then
+  echo "  [OK]   x264enc (software fallback available)"
+else
+  echo "  [WARN] no H.264 encoder found — video streaming may not work"
+fi
 
 # Create a non-root user so GUI apps (Steam in particular) that refuse to run as
 # root can be launched safely. The Xvfb display is started with -ac (no auth) so

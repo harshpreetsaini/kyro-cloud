@@ -149,6 +149,15 @@ def collect_stats() -> dict:
             stats["bitrateMbps"] = None
 
         stats["streaming"] = True
+
+        # Include GStreamer FPS if available.
+        try:
+            import streaming
+            gst_fps = getattr(streaming, '_gstreamer_fps', 0)
+            if gst_fps > 0:
+                stats["fps"] = round(gst_fps, 1)
+        except Exception:
+            pass
     except Exception:
         pass
     return stats

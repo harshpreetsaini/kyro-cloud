@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { wsUrl } from "@/lib/config/api";
 import { WebRTCViewer } from "./WebRTCViewer";
+import { GStreamerViewer } from "./GStreamerViewer";
 
 export function RemoteDesktop({ className = "" }: { className?: string }) {
   const { stream } = useRuntime();
@@ -56,6 +57,15 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
           to stream an actual Linux desktop.
         </p>
       </div>
+    );
+  }
+
+  if (stream.type === "gstreamer") {
+    return (
+      <GStreamerViewer
+        streamUrl={stream.url || "/ws/stream"}
+        className={className}
+      />
     );
   }
 
