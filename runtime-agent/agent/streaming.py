@@ -11,6 +11,29 @@ DESKTOP_PROC = None
 STREAM_PROC = None
 XVFB_PROC = None
 VNC_TUNNEL = None
+XVFB_AUTH = None
+
+
+def _setup_xauth(display):
+    """Create an X authority cookie so x11vnc can open the headless display in a
+    container where MIT-MAGIC-COOKIE auth is required."""
+    global XVFB_AUTH
+    if XVFB_AUTH:
+        return XVFB_AUTH
+    cookie = None
+    try:
+        if shutil.which("xauth") and shutil.which("mcookie"):
+            cookie = subprocess.run(["mcookie"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        cookie = None
+    if cookie:
+        auth = "/tmp/.xauth-%s" % display.replace(":", "")
+        try:
+            subprocess.run(["xauth", "-f", auth, "add", display, ".", cookie], capture_output=True, timeout=5)
+            XVFB_AUTH = auth
+        except Exception:
+            XVFB_AUTH = None
+    return XVFB_AUTH
 
 
 def _display_up(display: str) -> bool:
@@ -24,20 +47,26 @@ def _display_up(display: str) -> bool:
 
 
 def start_desktop(display: str = DISPLAY) -> bool:
-    global DESKTOP_PROC, XVFB_PROC
+    global DESKTOP_PROC, XVFB_PROC, XVFB_AUTH
     if DESKTOP_PROC and DESKTOP_PROC.poll() is None:
         return True
 
     # Always use :1 as the Colab virtual display
     display = ":1"
+    auth = _setup_xauth(display)
 
-    # Start Xvfb first (virtual framebuffer) if not already running
+    # Start Xvfb first (virtual framebuffer) if not already running.
     xvfb = os.environ.get("LUNA_XVFB", "Xvfb")
     if not _display_up(display):
-        xvfb_cmd = [xvfb, display, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"]
+        if auth:
+            env = dict(os.environ, XAUTHORITY=auth)
+            xvfb_cmd = [xvfb, display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"]
+        else:
+            env = dict(os.environ)
+            xvfb_cmd = [xvfb, display, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"]
         if XVFB_PROC is None or XVFB_PROC.poll() is not None:
             try:
-                XVFB_PROC = subprocess.Popen(xvfb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                XVFB_PROC = subprocess.Popen(xvfb_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 time.sleep(2)
                 if XVFB_PROC.poll() is not None:
                     print("[stream] Xvfb exited immediately")
@@ -45,11 +74,14 @@ def start_desktop(display: str = DISPLAY) -> bool:
             except FileNotFoundError:
                 print(f"[stream] {xvfb} not found, trying window manager without X server")
                 XVFB_PROC = None
+                return False
     else:
         print("[stream] X display already up, reusing it")
 
     # Launch a window manager on the virtual display
     env = dict(os.environ, DISPLAY=display)
+    if auth:
+        env["XAUTHORITY"] = auth
     dbus = shutil.which("dbus-launch")
 
     def launch(cmd):
@@ -126,7 +158,7 @@ def start_vnc(payload=None) -> dict:
     """Start x11vnc (mirroring the existing X display) on the Colab desktop and
     tunnel it to the backend over the agent's outbound /vnc WebSocket (no public
     ingress required)."""
-    global STREAM_PROC, DESKTOP_PROC, XVFB_PROC, VNC_TUNNEL
+    global STREAM_PROC, DESKTOP_PROC, XVFB_PROC, VNC_TUNNEL, XVFB_AUTH
     try:
         if not start_desktop():
             return {"ok": False, "error": "desktop environment failed to start"}
@@ -134,14 +166,13 @@ def start_vnc(payload=None) -> dict:
         if not x11vnc:
             return {"ok": False, "error": "x11vnc not installed — re-run the bootstrap notebook (apt install x11vnc)"}
         # x11vnc mirrors the Xvfb display (:1) and serves VNC on 5901 (loopback only).
-        STREAM_PROC = subprocess.Popen(
-            [
-                x11vnc, "-display", ":1", "-rfbport", "5901", "-nopw", "-forever",
-                "-localhost", "-quiet", "-defer", "1", "-wait", "1", "-shared",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        args = [
+            x11vnc, "-display", DISPLAY, "-rfbport", "5901", "-nopw", "-forever",
+            "-localhost", "-quiet", "-shared", "-noshm",
+        ]
+        if XVFB_AUTH:
+            args += ["-auth", XVFB_AUTH]
+        STREAM_PROC = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         # Wait for x11vnc to actually bind the VNC port before we start pumping,
         # otherwise noVNC would connect to an empty tunnel and show a black screen.
@@ -149,7 +180,16 @@ def start_vnc(payload=None) -> dict:
         for _ in range(40):
             time.sleep(0.5)
             if STREAM_PROC.poll() is not None:
-                return {"ok": False, "error": "x11vnc exited (code %s)" % STREAM_PROC.returncode}
+                err = b""
+                try:
+                    err = STREAM_PROC.stderr.read()
+                except Exception:
+                    pass
+                return {
+                    "ok": False,
+                    "error": "x11vnc exited (code %s): %s"
+                    % (STREAM_PROC.returncode, err.decode(errors="replace")[:600]),
+                }
             try:
                 vnc_sock = socket.create_connection(("127.0.0.1", 5901), timeout=2)
                 break

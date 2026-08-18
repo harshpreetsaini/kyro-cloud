@@ -40,6 +40,12 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt-get update -y 2>/dev/null || apt-get up
 # Repair any packages left half-configured by an interrupted/previous install.
 $SUDO DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>/dev/null || dpkg --configure -a || true
 
+# Enable the universe repository (provides Lutris, etc.) and refresh indexes.
+$SUDO add-apt-repository -y universe 2>/dev/null \
+  || $SUDO sed -i 's/^#\s*\(deb.*universe\)$/\1/' /etc/apt/sources.list 2>/dev/null \
+  || true
+$SUDO DEBIAN_FRONTEND=noninteractive apt-get update -y 2>/dev/null || apt-get update -y || true
+
 echo "[bootstrap] installing desktop environment + VNC (this may take 3-5 minutes)..."
 apt_install xfce4 xfce4-goodies xvfb tigervnc-standalone-server dbus-x11 x11vnc openbox feh
 # Ensure openbox is available as a lightweight WM fallback
@@ -82,9 +88,19 @@ install_steam() {
   fi
   echo "[bootstrap] apt steam unavailable — downloading official .deb..."
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o /tmp/steam.deb "https://cdn.steampowered.com/client/installer/steam.deb" 2>/dev/null \
-      && ($SUDO dpkg -i /tmp/steam.deb 2>/dev/null || dpkg -i /tmp/steam.deb 2>/dev/null || true) \
-      && ($SUDO apt-get install -f -y 2>/dev/null || apt-get install -f -y 2>/dev/null || true)
+    for url in \
+      "https://cdn.cloudflare.steamstatic.com/client/installer/steam.deb" \
+      "https://steamcdn-a.akamai.net/client/installer/steam.deb" \
+      "https://cdn.steampowered.com/client/installer/steam.deb"; do
+      if curl -fsSL -o /tmp/steam.deb "$url" 2>/dev/null && [ -s /tmp/steam.deb ]; then
+        echo "[bootstrap] downloaded steam.deb from $url"
+        break
+      fi
+    done
+    if [ -s /tmp/steam.deb ]; then
+      ($SUDO dpkg -i /tmp/steam.deb 2>/dev/null || dpkg -i /tmp/steam.deb 2>/dev/null || true) \
+        && ($SUDO apt-get install -f -y 2>/dev/null || apt-get install -f -y 2>/dev/null || true)
+    fi
   fi
   command -v steam >/dev/null 2>&1 && echo "[ok] steam via deb" || echo "[warn] steam not installed"
 }
