@@ -8,6 +8,7 @@ import websocket  # websocket-client
 from system import detect_gpu, system_info, collect_stats
 import streaming
 import apps
+import webrtc_stream
 
 BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
@@ -61,22 +62,43 @@ def on_message(ws, raw):
     p = msg.get("payload") or {}
     if t == "prepare_desktop":
         _session_active = True
-        streaming.start_desktop(p.get("display", streaming.DISPLAY))
-        send(ws, "desktop_ready", {})
+        try:
+            ok = streaming.start_desktop(p.get("display", streaming.DISPLAY))
+        except Exception as ex:
+            ok = False
+            err = f"desktop start crashed: {ex}"
+        else:
+            err = None
+        if ok:
+            send(ws, "desktop_ready", {"ok": True})
+        else:
+            send(
+                ws,
+                "desktop_ready",
+                {
+                    "ok": False,
+                    "error": err
+                    or "Could not start Xvfb / window manager. Re-run the bootstrap notebook so xvfb, openbox/xfce4 and x11vnc get installed.",
+                },
+            )
     elif t == "start_stream":
         _session_active = True
-        result = streaming.start_stream(p)
+        try:
+            result = streaming.start_stream(p)
+        except Exception as ex:
+            result = {"ok": False, "error": f"start_stream crashed: {ex}"}
         if result.get("error"):
             send(ws, "error", result)
         else:
             send(ws, "stream_ready", result)
     elif t == "start_vnc":
         _session_active = True
-        result = streaming.start_vnc(p)
-        if result.get("error"):
-            send(ws, "error", result)
-        else:
-            send(ws, "vnc_ready", result)
+        try:
+            result = streaming.start_vnc(p)
+        except Exception as ex:
+            result = {"ok": False, "error": f"start_vnc crashed: {ex}"}
+        # Always reply (with ok or a real error) so the backend never hangs waiting.
+        send(ws, "vnc_ready", result)
     elif t == "launch_game":
         streaming.launch_game(p)
         send(ws, "game.started", p)
@@ -88,6 +110,13 @@ def on_message(ws, raw):
     elif t == "stop_app":
         result = apps.stop_app(p.get("id"), agent_send)
         send(ws, "app.stop_result", {"id": p.get("id"), **result})
+    elif t == "start_webrtc":
+        _session_active = True
+        try:
+            result = webrtc_stream.start(p)
+        except Exception as ex:
+            result = {"ok": False, "error": f"start_webrtc crashed: {ex}"}
+        send(ws, "webrtc_ready", result)
     elif t == "stop":
         _session_active = False
         streaming.stop_all()

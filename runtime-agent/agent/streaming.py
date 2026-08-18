@@ -65,9 +65,11 @@ def start_desktop(display: str = DISPLAY) -> bool:
             if DESKTOP_PROC.poll() is None:
                 # Paint a visible background so the desktop is never pure black.
                 try:
-                    subprocess.Popen(
-                        ["xsetroot", "-solid", "#16161e"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
+                    wp = "/usr/share/backgrounds/luna-cloud.png"
+                    if os.path.exists(wp) and shutil.which("feh"):
+                        subprocess.Popen(["feh", "--bg-scale", wp], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        subprocess.Popen(["xsetroot", "-solid", "#16161e"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass
                 return True
@@ -125,41 +127,47 @@ def start_vnc(payload=None) -> dict:
     tunnel it to the backend over the agent's outbound /vnc WebSocket (no public
     ingress required)."""
     global STREAM_PROC, DESKTOP_PROC, XVFB_PROC, VNC_TUNNEL
-    if not start_desktop():
-        return {"error": "desktop environment failed to start"}
-    x11vnc = shutil.which("x11vnc")
-    if not x11vnc:
-        return {"error": "x11vnc not installed — re-run the bootstrap notebook"}
-    # x11vnc mirrors the Xvfb display (:1) and serves VNC on 5901 (loopback only).
-    STREAM_PROC = subprocess.Popen(
-        [x11vnc, "-display", ":1", "-rfbport", "5901", "-nopw", "-forever", "-localhost", "-quiet"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # Wait for x11vnc to actually bind the VNC port before we start pumping,
-    # otherwise noVNC would connect to an empty tunnel and show a black screen.
-    vnc_sock = None
-    for _ in range(40):
-        time.sleep(0.5)
-        if STREAM_PROC.poll() is not None:
-            return {"error": "x11vnc exited (code %s)" % STREAM_PROC.returncode}
-        try:
-            vnc_sock = socket.create_connection(("127.0.0.1", 5901), timeout=2)
-            break
-        except Exception:
-            vnc_sock = None
-    if vnc_sock is None:
-        return {"error": "x11vnc did not open port 5901"}
-
-    # Open the outbound tunnel to the backend /vnc endpoint.
-    backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
-    token = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
-    ws_url = "%s?token=%s" % (backend, token)
     try:
-        VNC_TUNNEL = websocket.create_connection(ws_url)
+        if not start_desktop():
+            return {"ok": False, "error": "desktop environment failed to start"}
+        x11vnc = shutil.which("x11vnc")
+        if not x11vnc:
+            return {"ok": False, "error": "x11vnc not installed — re-run the bootstrap notebook (apt install x11vnc)"}
+        # x11vnc mirrors the Xvfb display (:1) and serves VNC on 5901 (loopback only).
+        STREAM_PROC = subprocess.Popen(
+            [
+                x11vnc, "-display", ":1", "-rfbport", "5901", "-nopw", "-forever",
+                "-localhost", "-quiet", "-defer", "1", "-wait", "1", "-shared",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Wait for x11vnc to actually bind the VNC port before we start pumping,
+        # otherwise noVNC would connect to an empty tunnel and show a black screen.
+        vnc_sock = None
+        for _ in range(40):
+            time.sleep(0.5)
+            if STREAM_PROC.poll() is not None:
+                return {"ok": False, "error": "x11vnc exited (code %s)" % STREAM_PROC.returncode}
+            try:
+                vnc_sock = socket.create_connection(("127.0.0.1", 5901), timeout=2)
+                break
+            except Exception:
+                vnc_sock = None
+        if vnc_sock is None:
+            return {"ok": False, "error": "x11vnc did not open port 5901"}
+
+        # Open the outbound tunnel to the backend /vnc endpoint.
+        backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
+        token = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+        ws_url = "%s?token=%s" % (backend, token)
+        try:
+            VNC_TUNNEL = websocket.create_connection(ws_url, timeout=15)
+        except Exception as e:
+            return {"ok": False, "error": "VNC tunnel connect failed: %s" % e}
     except Exception as e:
-        return {"error": "VNC tunnel connect failed: %s" % e}
+        return {"ok": False, "error": "start_vnc failed: %s" % e}
 
     # Pump VNC TCP (127.0.0.1:5901) <-> tunnel WebSocket.
     s = vnc_sock

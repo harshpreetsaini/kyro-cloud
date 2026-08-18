@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { wsUrl } from "@/lib/config/api";
+import { WebRTCViewer } from "./WebRTCViewer";
 
 export function RemoteDesktop({ className = "" }: { className?: string }) {
   const { stream } = useRuntime();
@@ -60,9 +61,12 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
 
   if (stream.type === "webrtc") {
     return (
-      <div className={`flex items-center justify-center bg-black text-center gap-2 text-sm text-muted ${className}`}>
-        WebRTC (Selkies) stream — connect the Colab agent to receive signaling.
-      </div>
+      <WebRTCViewer
+        signalingUrl={stream.signalingUrl || "/ws/signal"}
+        room={stream.room || "default"}
+        iceServers={stream.iceServers}
+        className={className}
+      />
     );
   }
 

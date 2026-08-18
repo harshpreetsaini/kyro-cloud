@@ -67,6 +67,8 @@ export interface StreamClientConfig {
   type: StreamType;
   url?: string;
   signalingUrl?: string;
+  room?: string;
+  iceServers?: { urls: string }[];
   password?: string | null;
   resolution: string;
   fps: number;
