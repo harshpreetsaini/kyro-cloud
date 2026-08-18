@@ -13,7 +13,7 @@ function Bar({ label, value, suffix = "%", tone = "bg-accent" }: { label: string
     <div className="panel p-3">
       <div className="flex justify-between text-xs mb-2">
         <span className="text-muted">{label}</span>
-        <span className="mono">{value == null ? "--" : `${Math.round(value)}${suffix}`}</span>
+        <span className="mono text-muted">{value == null ? "Unavailable" : `${Math.round(value)}${suffix}`}</span>
       </div>
       <div className="h-2 bg-secondary rounded-full overflow-hidden">
         <div className={`h-full ${tone} transition-all`} style={{ width: `${pct}%` }} />
@@ -22,13 +22,14 @@ function Bar({ label, value, suffix = "%", tone = "bg-accent" }: { label: string
   );
 }
 
-function Metric({ label, value, unit, sub }: { label: string; value: string; unit?: string; sub?: string }) {
+function Metric({ label, value, unit, sub }: { label: string; value: string | null; unit?: string; sub?: string }) {
+  const isUnavailable = value == null || value === "--";
   return (
     <div className="panel p-4 flex flex-col gap-1">
       <span className="text-[11px] uppercase tracking-wider text-muted">{label}</span>
-      <span className="mono text-3xl text-accent leading-none">
-        {value}
-        {unit && <span className="text-base text-muted ml-1">{unit}</span>}
+      <span className={`mono text-3xl leading-none ${isUnavailable ? "text-muted" : "text-accent"}`}>
+        {isUnavailable ? "—" : value}
+        {!isUnavailable && unit && <span className="text-base text-muted ml-1">{unit}</span>}
       </span>
       {sub && <span className="text-[11px] text-muted">{sub}</span>}
     </div>
@@ -38,6 +39,8 @@ function Metric({ label, value, unit, sub }: { label: string; value: string; uni
 export default function PerformancePage() {
   const { stats, systemInfo, statsHistory } = useRuntime();
   const phase = useCloudPhase();
+
+  const hasTelemetry = stats?.gpuPct != null || stats?.cpuPct != null || stats?.ramUsedMb != null;
 
   if (phase !== "online") {
     return (
@@ -72,6 +75,16 @@ export default function PerformancePage() {
         <Metric label="Latency" value={fmt(stats?.latencyMs, "ms")} sub={systemInfo?.network?.quality || "—"} />
         <Metric label="VRAM" value={fmt(stats?.vramUsedMb, "MB")} sub={`of ${fmt(stats?.vramTotalMb, "MB") || "--"}`} />
       </div>
+
+      {!hasTelemetry && (
+        <Card className="flex items-center gap-3">
+          <StatusDot tone="starting" pulse />
+          <div>
+            <p className="font-medium">Waiting for runtime telemetry</p>
+            <p className="text-sm text-muted">The Colab agent will begin sending metrics shortly.</p>
+          </div>
+        </Card>
+      )}
 
       <StatsGraphs history={statsHistory} />
 

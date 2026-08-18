@@ -10,33 +10,31 @@ export default function DiagnosticsPage() {
   const [showStream, setShowStream] = useState(false);
 
   const gpuOk = systemInfo?.gpu?.available;
+  const cpuOk = (systemInfo?.cpu?.cores ?? 0) > 0;
+  const ramOk = (systemInfo?.ram?.totalMb ?? 0) > 0;
   const storageOk = (systemInfo?.storage?.totalMb ?? 0) > 0;
   const streamingOk = session?.state === "STREAMING";
-  const desktopOk = session?.state === "ONLINE" || session?.state === "STREAMING";
+  const desktopOk = session?.state === "ONLINE" || session?.state === "STREAMING" || session?.state === "DESKTOP_READY" || session?.state === "STREAM_READY";
+  const agentOk = session?.state !== "OFFLINE" && session?.state !== "STOPPED" && session?.state !== "ERROR";
+  const networkOk = systemInfo?.network?.quality && systemInfo.network.quality !== "unknown";
 
   const rows = [
-    { label: "Runtime", ok: !!session && session.state !== "ERROR", detail: session?.state || "OFFLINE", click: null as null | (() => void) },
+    { label: "Runtime", ok: agentOk, detail: session?.state || "OFFLINE", click: null as null | (() => void) },
     { label: "GPU", ok: !!gpuOk, detail: systemInfo?.gpu?.name || "Unavailable", click: null },
+    { label: "CPU", ok: cpuOk, detail: systemInfo?.cpu?.model ? `${systemInfo.cpu.cores} cores — ${systemInfo.cpu.model}` : "Unavailable", click: null },
+    { label: "RAM", ok: ramOk, detail: systemInfo?.ram?.totalMb ? `${Math.round(systemInfo.ram.totalMb)} MB` : "Unavailable", click: null },
     { label: "Storage", ok: storageOk, detail: systemInfo?.storage?.totalMb ? `${Math.round(systemInfo.storage.totalMb)} MB` : "Unavailable", click: null },
     { label: "Desktop", ok: desktopOk, detail: desktopOk ? "Ready" : "Not ready", click: null },
-    { label: "Audio", ok: true, detail: session?.provider === "webrtc" ? "WebRTC" : "VNC / desktop", click: null },
-    {
-      label: "Streaming",
-      ok: streamingOk,
-      detail: stream ? stream.type : session?.state === "ERROR" ? "Failed" : "—",
-      click: () => setShowStream((v) => !v),
-    },
-    { label: "Input", ok: connected, detail: connected ? "Link active" : "No link", click: null },
-    { label: "Network", ok: true, detail: systemInfo?.network?.quality || "unknown", click: null },
+    { label: "Streaming", ok: streamingOk, detail: stream ? stream.type.toUpperCase() : session?.state === "ERROR" ? "Failed" : "Not started", click: () => setShowStream((v) => !v) },
+    { label: "Network", ok: networkOk, detail: systemInfo?.network?.quality || "Unknown", click: null },
+    { label: "Input", ok: connected, detail: connected ? "WebSocket link active" : "Not connected", click: null },
   ];
 
   const streamSteps = [
-    { label: "Runtime", ok: !!session && session.state !== "ERROR" },
-    { label: "GPU", ok: !!gpuOk },
-    { label: "Display", ok: desktopOk },
-    { label: "Encoder", ok: true },
-    { label: "WebRTC", ok: !!stream && stream.type === "webrtc" },
-    { label: "VNC tunnel", ok: !!stream && stream.type === "vnc" },
+    { label: "Runtime agent", ok: agentOk },
+    { label: "GPU detected", ok: !!gpuOk },
+    { label: "Desktop display", ok: desktopOk },
+    { label: "VNC / WebRTC", ok: streamingOk },
   ];
 
   const errorText = session?.error || "No detailed error was reported by the runtime.";

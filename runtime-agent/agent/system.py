@@ -65,13 +65,28 @@ def _net_rates():
         else:
             up = down = 0.0
         _net_rates._prev = (now, cur.bytes_sent, cur.bytes_recv)
+
+        # Calculate network quality from combined throughput
+        total_bps = up + down
+        if total_bps > 5_000_000:
+            quality = "excellent"
+        elif total_bps > 1_000_000:
+            quality = "good"
+        elif total_bps > 200_000:
+            quality = "fair"
+        elif total_bps > 0:
+            quality = "poor"
+        else:
+            quality = "unknown"
+
         return {
             "upBps": round(up, 1),
             "downBps": round(down, 1),
             "state": "up" if (up or down) else "idle",
+            "quality": quality,
         }
     except Exception:
-        return {"upBps": None, "downBps": None, "state": None}
+        return {"upBps": None, "downBps": None, "state": None, "quality": "unknown"}
 
 
 def system_info() -> dict:
@@ -100,6 +115,7 @@ def system_info() -> dict:
         info["network"]["upBps"] = nr["upBps"]
         info["network"]["downBps"] = nr["downBps"]
         info["network"]["state"] = nr["state"]
+        info["network"]["quality"] = nr["quality"]
     except Exception:
         pass
     return info
@@ -125,6 +141,14 @@ def collect_stats() -> dict:
         stats["netUpBps"] = nr["upBps"]
         stats["netDownBps"] = nr["downBps"]
         stats["netState"] = nr["state"]
+
+        # Estimate stream bitrate from network downlink (VNC data flows agent→backend→browser)
+        if nr["downBps"] and nr["downBps"] > 0:
+            stats["bitrateMbps"] = round(nr["downBps"] * 8 / 1_000_000, 2)
+        else:
+            stats["bitrateMbps"] = None
+
+        stats["streaming"] = True
     except Exception:
         pass
     return stats

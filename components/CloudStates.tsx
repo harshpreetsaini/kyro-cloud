@@ -20,14 +20,16 @@ const STARTING: RuntimeState[] = [
   "RECONNECTING",
 ];
 
+const OFFLINE_STATES: RuntimeState[] = ["OFFLINE", "STOPPED", "DISCONNECTED"];
+
 export function useCloudPhase(): CloudPhase {
   const { connected, session } = useRuntime();
   const state = session?.state;
   if (state === "ERROR") return "error";
   if (state === "ONLINE" || state === "STREAMING") return "online";
-  // RUNTIME_CONNECTED = agent attached but session not started yet -> show Start
   if (state === "RUNTIME_CONNECTED") return "ready";
   if (state && STARTING.includes(state)) return "starting";
+  if (!state || OFFLINE_STATES.includes(state)) return "offline";
   return "offline";
 }
 
@@ -89,26 +91,32 @@ export function StartingHero() {
 
 export function ErrorHero() {
   const { session, restart } = useRuntime();
+  const error = session?.error || "";
+  const isAgentError = error.includes("agent did not connect") || error.includes("Colab runtime agent");
+  const isStreamError = error.includes("stream") || error.includes("VNC") || error.includes("x11vnc");
+
   return (
     <div className="flex flex-col items-center justify-center text-center gap-4 py-12">
       <div className="w-14 h-14 rounded-2xl bg-danger/15 flex items-center justify-center text-2xl text-danger">✕</div>
       <div>
         <p className="font-display text-lg tracking-wide text-danger">CLOUD PC UNAVAILABLE</p>
         <p className="text-sm text-muted mt-1 max-w-md">
-          The cloud runtime is connected, but the streaming service isn&apos;t ready.
+          {isAgentError
+            ? "The Colab runtime agent could not connect. Run the bootstrap notebook and verify the runtime secret."
+            : isStreamError
+              ? "The streaming service failed to start. Check that x11vnc and the desktop environment are installed."
+              : "The cloud runtime encountered an error during startup."}
         </p>
       </div>
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted">Streaming</span>
-        <Badge tone="danger">✕ Not running</Badge>
-      </div>
       {session?.error && (
-        <p className="mono text-[11px] text-danger/80 max-w-md break-words">{session.error}</p>
+        <div className="panel p-3 max-w-md w-full">
+          <p className="mono text-[11px] text-danger/80 break-words whitespace-pre-wrap">{session.error}</p>
+        </div>
       )}
       <div className="flex gap-2 mt-1">
-        <Button onClick={restart}>Retry Stream</Button>
+        <Button onClick={restart}>Retry</Button>
         <Link href="/diagnostics">
-          <Button variant="secondary">View Diagnostics</Button>
+          <Button variant="secondary">Diagnostics</Button>
         </Link>
       </div>
     </div>

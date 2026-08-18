@@ -19,6 +19,10 @@ import { signSession, verifySession, SESSION_COOKIE } from "../lib/auth/jwt.mjs"
 const FRONTEND_URL = (process.env.FRONTEND_URL || "").trim();
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
 // ---------- helpers ----------
 function corsHeaders(req) {
   const origin = req.headers.origin;
@@ -198,19 +202,49 @@ async function handleApi(req, res, url) {
     const result = m.stopApp(body.id);
     return sendJson(req, res, result.ok ? 200 : 400, result);
   }
+  // -----------------------------------------------------------------------
+  // File operations — proxied to Colab agent when connected, fallback to local
+  // -----------------------------------------------------------------------
+  async function filesAgent(rid, type, payload) {
+    if (!m.agentAttached) return null;
+    m.sendToAgent({ type, payload: { ...payload, requestId: rid } });
+    try {
+      return await m.waitForAgentResult(rid, 15000);
+    } catch {
+      return null;
+    }
+  }
+
   if (p === "/api/files/list" && method === "GET") {
     const dir = url.searchParams.get("path") || "/";
+    const rid = "fl-" + uid();
+    const result = await filesAgent(rid, "files.list", { path: dir });
+    if (result) {
+      return sendJson(req, res, result.ok ? 200 : 500, { ok: result.ok, data: result.items, error: result.error });
+    }
+    // Fallback to local filesystem if agent is not connected
     return sendJson(req, res, 200, { ok: true, data: listDir(dir) });
   }
   if (p === "/api/files/mkdir" && method === "POST") {
     const body = await readJson(req);
     if (!body.name) return sendJson(req, res, 400, { ok: false, error: "Missing name" });
+    const dirPath = (body.path || "/").replace(/\/$/, "") + "/" + body.name;
+    const rid = "fm-" + uid();
+    const result = await filesAgent(rid, "files.mkdir", { path: dirPath });
+    if (result) {
+      return sendJson(req, res, result.ok ? 200 : 500, { ok: result.ok, error: result.error });
+    }
     const ok = createFolder(body.path || "/", body.name);
     return sendJson(req, res, ok ? 200 : 400, { ok });
   }
   if (p === "/api/files/delete" && method === "DELETE") {
     const fp = url.searchParams.get("path");
     if (!fp) return sendJson(req, res, 400, { ok: false, error: "Missing path" });
+    const rid = "fd-" + uid();
+    const result = await filesAgent(rid, "files.delete", { path: fp });
+    if (result) {
+      return sendJson(req, res, result.ok ? 200 : 500, { ok: result.ok, error: result.error });
+    }
     const ok = remove(fp);
     return sendJson(req, res, ok ? 200 : 400, { ok });
   }
@@ -218,6 +252,11 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path || !body.newName)
       return sendJson(req, res, 400, { ok: false, error: "Missing fields" });
+    const rid = "fr-" + uid();
+    const result = await filesAgent(rid, "files.rename", { path: body.path, newName: body.newName });
+    if (result) {
+      return sendJson(req, res, result.ok ? 200 : 500, { ok: result.ok, error: result.error });
+    }
     const ok = rename(body.path, body.newName);
     return sendJson(req, res, ok ? 200 : 400, { ok });
   }
@@ -231,12 +270,32 @@ async function handleApi(req, res, url) {
       return sendJson(req, res, 400, { ok: false, error: "No file" });
     const dir = dirPart ? dirPart.content.toString("utf8") : "/";
     const target = path.posix.join(dir.replace(/\/$/, ""), filePart.filename);
+    const rid = "fu-" + uid();
+    const result = await filesAgent(rid, "files.write", {
+      path: target,
+      content: Array.from(filePart.content),
+    });
+    if (result) {
+      return sendJson(req, res, result.ok ? 200 : 500, { ok: result.ok, error: result.error });
+    }
     const ok = writeFile(target, filePart.content);
     return sendJson(req, res, ok ? 200 : 400, { ok });
   }
   if (p === "/api/files/download" && method === "GET") {
     const fp = url.searchParams.get("path");
     if (!fp) return sendJson(req, res, 400, { ok: false, error: "Missing path" });
+    const rid = "fdl-" + uid();
+    const result = await filesAgent(rid, "files.read", { path: fp });
+    if (result) {
+      if (!result.ok) return sendJson(req, res, 404, { ok: false, error: result.error });
+      const buf = Buffer.from(result.data);
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": `attachment; filename="${path.basename(fp)}"`,
+        ...corsHeaders(req),
+      });
+      return res.end(buf);
+    }
     const data = readFile(fp);
     if (!data) return sendJson(req, res, 404, { ok: false, error: "Not found" });
     res.writeHead(200, {
