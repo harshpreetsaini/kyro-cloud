@@ -134,6 +134,14 @@ def start_vnc(payload=None) -> dict:
         x11vnc = shutil.which("x11vnc")
         if not x11vnc:
             return {"ok": False, "error": "x11vnc not installed — re-run the bootstrap notebook (apt install x11vnc)"}
+        # Kill any stale x11vnc (e.g. left over from a previous agent run) that would
+        # otherwise hold port 5901 and make the new one exit with "could not obtain
+        # listening port".
+        try:
+            subprocess.run(["pkill", "-f", "x11vnc"], check=False, timeout=5)
+        except Exception:
+            pass
+        time.sleep(1)
         # x11vnc mirrors the Xvfb display (:1) and serves VNC on 5901 (loopback only).
         args = [
             x11vnc, "-display", DISPLAY, "-rfbport", "5901", "-nopw", "-forever",

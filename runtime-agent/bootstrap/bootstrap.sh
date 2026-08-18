@@ -164,6 +164,18 @@ for b in Xvfb x11vnc openbox xfce4-session xterm firefox steam lutris heroic feh
   fi
 done
 
+# Create a non-root user so GUI apps (Steam in particular) that refuse to run as
+# root can be launched safely. The Xvfb display is started with -ac (no auth) so
+# this user can connect to it.
+if ! id gamer >/dev/null 2>&1; then
+  echo "[bootstrap] creating 'gamer' user for GUI apps..."
+  useradd -m -s /bin/bash gamer 2>/dev/null || useradd -m gamer 2>/dev/null || true
+fi
+usermod -aG video,audio,gamer gamer 2>/dev/null || true
+mkdir -p /home/gamer/.config /home/gamer/.cache
+chown -R gamer:gamer /home/gamer 2>/dev/null || true
+export GAMER_USER=gamer
+
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..."
 cd "$AGENT_DIR/agent"
 # Supervise the agent inside its own session (setsid) so Colab cannot reap it

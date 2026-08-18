@@ -1,10 +1,27 @@
 import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
 
 DISPLAY = os.environ.get("LUNA_DISPLAY", ":1")
+
+
+def _gamer_available():
+    """Run GUI apps as the non-root 'gamer' user when available — Steam refuses
+    to run as root, and other desktop apps are happier off-root."""
+    try:
+        return (shutil.which("runuser") is not None
+                and subprocess.run(["id", "gamer"], capture_output=True).returncode == 0)
+    except Exception:
+        return False
+
+
+def _build_launch_cmd(exe, args):
+    if _gamer_available():
+        return ["runuser", "-u", "gamer", "--", "env", "DISPLAY=" + DISPLAY, exe, *args]
+    return [exe, *args]
 
 APP_REGISTRY = [
     {
@@ -137,11 +154,13 @@ def launch_app(app_id, send):
         env["DISPLAY"] = DISPLAY
         if "DBUS_SESSION_BUS_ADDRESS" not in env:
             env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/tmp/dbus-{app_id}"
+        cmd = _build_launch_cmd(exe, entry.get("args", []))
         proc = subprocess.Popen(
-            [exe, *entry.get("args", [])],
+            cmd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
     except Exception as ex:
         return {"ok": False, "error": f"Failed to start {entry['name']}: {ex}", "state": "FAILED"}
@@ -152,12 +171,22 @@ def launch_app(app_id, send):
     return {"ok": True, "state": "RUNNING", "pid": proc.pid}
 
 
+def _kill(proc):
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+
 def stop_app(app_id, send):
     rec = _PROCS.get(app_id)
     if not rec or not rec.get("proc"):
         return {"ok": True, "state": "STOPPED"}
     try:
-        rec["proc"].terminate()
+        _kill(rec["proc"])
         send("app.state", {"id": app_id, "state": "STOPPING"})
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
@@ -168,8 +197,5 @@ def stop_all():
     for app_id, rec in list(_PROCS.items()):
         proc = rec.get("proc")
         if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            _kill(proc)
     _PROCS.clear()
