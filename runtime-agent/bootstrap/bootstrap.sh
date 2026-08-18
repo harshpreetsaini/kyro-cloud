@@ -5,6 +5,11 @@
 export DEBIAN_FRONTEND=noninteractive
 set -uo pipefail
 
+# Create the agent log immediately so we can tell (even from a failed run)
+# whether the bootstrap executed at all. The agent appends to this file too.
+: > /tmp/luna-agent.log
+echo "[bootstrap] starting at $(date -u)" >> /tmp/luna-agent.log
+
 # Robust defaults. `sudo` strips the environment, so the notebook must invoke this
 # with `sudo -E`; these defaults also keep the script from dying on unset variables.
 export LUNA_BACKEND_WS="${LUNA_BACKEND_WS:-wss://kyro-cloud-3fp0.onrender.com/agent}"
