@@ -4,6 +4,13 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Card, Stat, fmt, Badge } from "@/components/ui";
 import type { NetworkQuality } from "@shared/types";
 
+function fmtBps(bps?: number | null): string {
+  if (bps == null) return "--";
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)}MB/s`;
+  if (bps >= 1000) return `${(bps / 1000).toFixed(0)}KB/s`;
+  return `${Math.round(bps)}B/s`;
+}
+
 const QUALITY_TONE: Record<NetworkQuality, "success" | "accent" | "warning" | "danger" | "neutral"> = {
   excellent: "success",
   good: "accent",
@@ -48,7 +55,11 @@ export function SystemStatsPanel() {
       />
       <Stat
         label="Network"
-        value={fmt(net?.pingMs, "ms")}
+        value={
+          net?.upBps != null || net?.downBps != null
+            ? `↑${fmtBps(net.upBps)} ↓${fmtBps(net.downBps)}`
+            : fmt(net?.pingMs, "ms")
+        }
         sub={
           net?.quality ? (
             <Badge tone={QUALITY_TONE[net.quality as NetworkQuality]}>{net.quality}</Badge>

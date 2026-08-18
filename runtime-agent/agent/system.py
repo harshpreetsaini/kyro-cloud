@@ -50,6 +50,30 @@ def detect_gpu() -> dict:
     return {"available": False}
 
 
+def _net_rates():
+    try:
+        import time
+        import psutil
+
+        cur = psutil.net_io_counters()
+        now = time.time()
+        prev = getattr(_net_rates, "_prev", None)
+        if prev is not None and (now - prev[0]) > 0:
+            dt = now - prev[0]
+            up = max(0.0, (cur.bytes_sent - prev[1]) / dt)
+            down = max(0.0, (cur.bytes_recv - prev[2]) / dt)
+        else:
+            up = down = 0.0
+        _net_rates._prev = (now, cur.bytes_sent, cur.bytes_recv)
+        return {
+            "upBps": round(up, 1),
+            "downBps": round(down, 1),
+            "state": "up" if (up or down) else "idle",
+        }
+    except Exception:
+        return {"upBps": None, "downBps": None, "state": None}
+
+
 def system_info() -> dict:
     gpu = detect_gpu()
     info = {
@@ -57,7 +81,7 @@ def system_info() -> dict:
         "cpu": {"model": _cpu_model(), "cores": os.cpu_count()},
         "ram": {"totalMb": None, "usedMb": None},
         "storage": {"totalMb": None, "usedMb": None, "mounted": False},
-        "network": {"pingMs": None, "bitrateMbps": None, "quality": "unknown"},
+        "network": {"pingMs": None, "bitrateMbps": None, "quality": "unknown", "upBps": None, "downBps": None, "state": None},
         "os": "Linux",
         "hostname": os.uname().nodename,
     }
@@ -72,6 +96,10 @@ def system_info() -> dict:
             "usedMb": du.used // (1024 * 1024),
             "mounted": True,
         }
+        nr = _net_rates()
+        info["network"]["upBps"] = nr["upBps"]
+        info["network"]["downBps"] = nr["downBps"]
+        info["network"]["state"] = nr["state"]
     except Exception:
         pass
     return info
@@ -93,6 +121,10 @@ def collect_stats() -> dict:
             if gpu.get("vramMb") is not None:
                 stats["vramUsedMb"] = gpu.get("usedMb")
                 stats["vramTotalMb"] = gpu.get("vramMb")
+        nr = _net_rates()
+        stats["netUpBps"] = nr["upBps"]
+        stats["netDownBps"] = nr["downBps"]
+        stats["netState"] = nr["state"]
     except Exception:
         pass
     return stats

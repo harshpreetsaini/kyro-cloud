@@ -39,6 +39,12 @@ apt_install xfce4 xvfb tigervnc-standalone-server dbus-x11 x11vnc
 # Ensure openbox is available as a lightweight WM fallback
 apt_install openbox
 
+# Applications that the cloud PC can actually launch (real binaries, not mocked).
+echo "[bootstrap] installing applications (Firefox, terminal, file manager, settings)..."
+apt_install firefox xterm pcmanfm thunar xfce4-settings xfce4-settings-manager
+# Best-effort Steam (native client exists for Linux).
+apt_install steam || echo "[bootstrap] steam not installable in this runtime — app will report UNSUPPORTED/Not installed."
+
 echo "[bootstrap] installing Python deps..."
 python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" || true
 

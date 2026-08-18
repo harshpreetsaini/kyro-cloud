@@ -38,7 +38,7 @@ export interface SystemInfo {
   cpu: { model: string | null; cores: number | null; utilizationPct: number | null };
   ram: { totalMb: number | null; usedMb: number | null };
   storage: { totalMb: number | null; usedMb: number | null; mounted: boolean };
-  network: { pingMs: number | null; bitrateMbps: number | null; quality: NetworkQuality };
+  network: { pingMs: number | null; bitrateMbps: number | null; quality: NetworkQuality; upBps?: number | null; downBps?: number | null; state?: string | null };
   simulated: boolean;
 }
 
@@ -56,6 +56,9 @@ export interface SystemStats {
   latencySource?: "control" | "webrtc" | "agent" | null;
   bitrateMbps: number | null;
   streaming: boolean;
+  netUpBps?: number | null;
+  netDownBps?: number | null;
+  netState?: string | null;
 }
 
 export type StreamType = "vnc" | "webrtc";

@@ -183,6 +183,21 @@ async function handleApi(req, res, url) {
     if (result.ok && result.data) m.notify(`Launching ${result.data.name}...`, "info");
     return sendJson(req, res, result.ok ? 200 : 404, result);
   }
+  if (p === "/api/apps" && method === "GET") {
+    return sendJson(req, res, 200, { ok: true, data: m.getApps() });
+  }
+  if (p === "/api/apps/launch" && method === "POST") {
+    const body = await readJson(req);
+    if (!body.id) return sendJson(req, res, 400, { ok: false, error: "Missing app id" });
+    const result = m.launchApp(body.id);
+    return sendJson(req, res, result.ok ? 200 : 400, result);
+  }
+  if (p === "/api/apps/stop" && method === "POST") {
+    const body = await readJson(req);
+    if (!body.id) return sendJson(req, res, 400, { ok: false, error: "Missing app id" });
+    const result = m.stopApp(body.id);
+    return sendJson(req, res, result.ok ? 200 : 400, result);
+  }
   if (p === "/api/files/list" && method === "GET") {
     const dir = url.searchParams.get("path") || "/";
     return sendJson(req, res, 200, { ok: true, data: listDir(dir) });

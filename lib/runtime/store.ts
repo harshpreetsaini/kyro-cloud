@@ -2,6 +2,30 @@ import { api, wsUrl } from "@/lib/config/api";
 import { getToken, authHeader } from "@/lib/auth/client";
 import type { SessionInfo, SystemInfo, SystemStats, StreamClientConfig } from "@shared/types";
 
+export type AppState =
+  | "NOT_INSTALLED"
+  | "INSTALLING"
+  | "INSTALLED"
+  | "STARTING"
+  | "RUNNING"
+  | "STOPPING"
+  | "STOPPED"
+  | "FAILED"
+  | "UNSUPPORTED";
+
+export interface AppEntry {
+  id: string;
+  name: string;
+  category?: string;
+  state?: AppState;
+  installed?: boolean;
+  executable?: string | null;
+  supported?: boolean;
+  note?: string;
+  pid?: number;
+  exitCode?: number;
+}
+
 interface Notification {
   id: string;
   message: string;
@@ -17,6 +41,7 @@ interface RuntimeState {
   notifications: Notification[];
   statsHistory: SystemStats[];
   runningGames: string[];
+  apps: Record<string, AppEntry>;
 }
 
 const EMPTY: RuntimeState = {
@@ -28,6 +53,7 @@ const EMPTY: RuntimeState = {
   notifications: [],
   statsHistory: [],
   runningGames: [],
+  apps: {},
 };
 
 let state: RuntimeState = EMPTY;
@@ -85,7 +111,7 @@ function connect() {
         state = { ...state, session: event.payload as SessionInfo };
         const st = (event.payload as SessionInfo)?.state;
         if (st === "OFFLINE" || st === "STOPPED" || st === "DISCONNECTED") {
-          state = { ...state, runningGames: [], stream: null };
+          state = { ...state, runningGames: [], stream: null, apps: {} };
         }
         emit();
         break;
@@ -134,6 +160,18 @@ function connect() {
         };
         emit();
         break;
+      case "apps": {
+        const payload = event.payload as Record<string, AppEntry> | AppEntry[] | null;
+        let apps: Record<string, AppEntry> = {};
+        if (Array.isArray(payload)) {
+          for (const a of payload) apps[a.id] = a;
+        } else if (payload) {
+          apps = payload as Record<string, AppEntry>;
+        }
+        state = { ...state, apps };
+        emit();
+        break;
+      }
       default:
         break;
     }
@@ -165,6 +203,37 @@ export function runtimeStopGame(id: string) {
   }).then(() => {
     state = { ...state, runningGames: state.runningGames.filter((g) => g !== id) };
     emit();
+  });
+}
+
+export async function runtimeFetchApps(): Promise<AppEntry[]> {
+  try {
+    const res = await fetch(api("/api/apps"), { headers: { ...authHeader() } });
+    const data = await res.json();
+    const list: AppEntry[] = data?.data || [];
+    const apps: Record<string, AppEntry> = {};
+    for (const a of list) apps[a.id] = a;
+    state = { ...state, apps };
+    emit();
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+export function runtimeLaunchApp(id: string) {
+  fetch(api("/api/apps/launch"), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeader() },
+    body: JSON.stringify({ id }),
+  });
+}
+
+export function runtimeStopApp(id: string) {
+  fetch(api("/api/apps/stop"), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeader() },
+    body: JSON.stringify({ id }),
   });
 }
 

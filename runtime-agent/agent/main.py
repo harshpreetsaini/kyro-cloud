@@ -7,12 +7,14 @@ import websocket  # websocket-client
 
 from system import detect_gpu, system_info, collect_stats
 import streaming
+import apps
 
 BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
 RECONNECT = int(os.environ.get("LUNA_RECONNECT", "5"))
 _running = True
 _session_active = False
+_ws = None
 
 
 def url() -> str:
@@ -27,6 +29,12 @@ def send(ws, type_: str, payload=None):
         pass
 
 
+def agent_send(type_: str, payload=None):
+    """Send to the active backend websocket (set by on_open)."""
+    if _ws is not None:
+        send(_ws, type_, payload)
+
+
 def stats_loop(ws):
     while _running:
         if _session_active:
@@ -36,7 +44,10 @@ def stats_loop(ws):
 
 
 def on_open(ws):
+    global _ws
+    _ws = ws
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
+    send(ws, "app.list", apps.detect_apps())
     threading.Thread(target=stats_loop, args=(ws,), daemon=True).start()
 
 
@@ -69,9 +80,18 @@ def on_message(ws, raw):
     elif t == "launch_game":
         streaming.launch_game(p)
         send(ws, "game.started", p)
+    elif t == "detect_apps":
+        send(ws, "app.list", apps.detect_apps())
+    elif t == "launch_app":
+        result = apps.launch_app(p.get("id"), agent_send)
+        send(ws, "app.launch_result", {"id": p.get("id"), **result})
+    elif t == "stop_app":
+        result = apps.stop_app(p.get("id"), agent_send)
+        send(ws, "app.stop_result", {"id": p.get("id"), **result})
     elif t == "stop":
         _session_active = False
         streaming.stop_all()
+        apps.stop_all()
     elif t == "ping":
         send(ws, "pong", {})
 
