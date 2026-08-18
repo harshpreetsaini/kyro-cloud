@@ -63,25 +63,25 @@ def on_message(ws, raw):
     p = msg.get("payload") or {}
     if t == "prepare_desktop":
         _session_active = True
-        try:
-            ok = streaming.start_desktop(p.get("display", streaming.DISPLAY))
-        except Exception as ex:
-            ok = False
-            err = f"desktop start crashed: {ex}"
-        else:
-            err = None
-        if ok:
-            send(ws, "desktop_ready", {"ok": True})
-        else:
-            send(
-                ws,
-                "desktop_ready",
-                {
-                    "ok": False,
-                    "error": err
-                    or "Could not start Xvfb / window manager. Re-run the bootstrap notebook so xvfb, openbox/xfce4 and x11vnc get installed.",
-                },
-            )
+
+        def _do_prepare():
+            try:
+                ok = streaming.start_desktop(p.get("display", streaming.DISPLAY))
+                if ok:
+                    send(ws, "desktop_ready", {"ok": True})
+                else:
+                    send(
+                        ws,
+                        "desktop_ready",
+                        {
+                            "ok": False,
+                            "error": "Could not start Xvfb / window manager. Re-run the bootstrap notebook so xvfb, openbox/xfce4 and x11vnc get installed.",
+                        },
+                    )
+            except Exception as ex:
+                send(ws, "desktop_ready", {"ok": False, "error": f"desktop start crashed: {ex}"})
+
+        threading.Thread(target=_do_prepare, daemon=True).start()
     elif t == "start_stream":
         _session_active = True
         try:
