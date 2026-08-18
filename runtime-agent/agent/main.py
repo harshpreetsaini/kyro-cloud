@@ -135,6 +135,9 @@ def on_close(ws, *args):
 
 
 def main():
+    print(
+        f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING (using default)'}"
+    )
     while _running:
         try:
             ws = websocket.WebSocketApp(

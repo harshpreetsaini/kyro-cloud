@@ -131,7 +131,7 @@ echo "[bootstrap] installing Python deps..."
 python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" || true
 
 echo "[bootstrap] killing any old agents..."
-pkill -f "python3 main.py" 2>/dev/null || true
+pkill -f "main.py" 2>/dev/null || true
 
 # Generate a clean wallpaper so the desktop is never a pure-black void.
 python3 - <<'PY'
@@ -161,19 +161,20 @@ done
 
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..."
 cd "$AGENT_DIR/agent"
-# `setsid` detaches the agent into its own session/process group so Colab cannot
-# reap it when this bootstrap cell finishes (a plain `nohup ... &` still gets
-# killed with the cell's process group). stdin is redirected from /dev/null so
-# the agent never blocks on the terminal.
-nohup setsid python3 main.py > /tmp/luna-agent.log 2>&1 < /dev/null &
-AGENT_PID=$!
-echo "[bootstrap] agent started in background (PID $AGENT_PID)"
-# Confirm it survived the fork before we declare success.
+# Supervise the agent inside its own session (setsid) so Colab cannot reap it
+# when this cell finishes, and wrap it in a restart loop so it comes back if it
+# ever exits or crashes. stdin is redirected from /dev/null.
+nohup setsid bash -c \
+  "while true; do cd '$AGENT_DIR/agent' && python3 main.py >> /tmp/luna-agent.log 2>&1; echo \"[supervisor] agent exited at \$(date), restarting in 3s\" >> /tmp/luna-agent.log; sleep 3; done" \
+  > /dev/null 2>&1 < /dev/null &
+SUP_PID=$!
+echo "[bootstrap] agent supervisor started (PID $SUP_PID)"
+# Confirm the supervisor survived the fork before declaring success.
 sleep 2
-if kill -0 "$AGENT_PID" 2>/dev/null; then
-  echo "[bootstrap] agent is running."
+if kill -0 "$SUP_PID" 2>/dev/null; then
+  echo "[bootstrap] supervisor is running — agent should connect within a few seconds."
 else
-  echo "[bootstrap] WARNING: agent did not stay up — see /tmp/luna-agent.log"
+  echo "[bootstrap] WARNING: supervisor did not stay up — see /tmp/luna-agent.log"
 fi
 
 echo "[bootstrap] done. Tail logs: !tail -n 80 /tmp/luna-agent.log"
