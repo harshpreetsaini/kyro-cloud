@@ -21,6 +21,7 @@ export default function LibraryPage() {
     fetch(api("/api/games"), { headers: { ...authHeader() } })
       .then((r) => r.json())
       .then((j) => setGames(j.data || []))
+      .catch(() => setGames([]))
       .finally(() => setLoading(false));
   }, []);
 

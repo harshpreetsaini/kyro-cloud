@@ -333,7 +333,7 @@ export default function GameDetailsPage() {
             </div>
           )}
 
-          {/* System Requirements (placeholder) */}
+          {/* System Requirements */}
           <div className="mb-6">
             <h2 className="text-lg font-semibold mb-3">System Requirements</h2>
             <div className="panel p-4">
@@ -344,7 +344,7 @@ export default function GameDetailsPage() {
                   <p className="text-xs">Processor: Intel Core i5-8400 / AMD Ryzen 5 2600</p>
                   <p className="text-xs">Memory: 16 GB RAM</p>
                   <p className="text-xs">Graphics: NVIDIA GTX 1070 / AMD RX 580</p>
-                  <p className="text-xs">Storage: 80 GB available space</p>
+                  <p className="text-xs">Storage: {game.downloadSize || "80 GB"} available space</p>
                 </div>
                 <div>
                   <p className="text-muted mb-1">Recommended</p>
@@ -352,7 +352,7 @@ export default function GameDetailsPage() {
                   <p className="text-xs">Processor: Intel Core i7-10700K / AMD Ryzen 7 3800X</p>
                   <p className="text-xs">Memory: 32 GB RAM</p>
                   <p className="text-xs">Graphics: NVIDIA RTX 3070 / AMD RX 6800</p>
-                  <p className="text-xs">Storage: 80 GB SSD</p>
+                  <p className="text-xs">Storage: {game.downloadSize || "80 GB"} SSD</p>
                 </div>
               </div>
             </div>
@@ -380,7 +380,7 @@ export default function GameDetailsPage() {
               <InfoRow label="Target FPS" value="60" />
               <InfoRow label="Controller" value={game.controllerSupport === "full" ? "Full Support" : game.controllerSupport === "none" ? "Not Supported" : "Partial"} />
               <InfoRow label="Status" value={game.installed || (install?.state === "ready") ? "✓ Installed" : isInstalling ? "⟳ Installing" : "○ Not Installed"} />
-              <InfoRow label="Size" value="~80 GB" />
+              <InfoRow label="Size" value={game.downloadSize || "— GB"} />
             </div>
           </div>
 

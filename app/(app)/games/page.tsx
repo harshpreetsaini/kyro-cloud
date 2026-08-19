@@ -28,6 +28,7 @@ export default function GamesPage() {
         setGames(j.data || []);
         if (j.meta?.genres) setGenres(j.meta.genres);
       })
+      .catch(() => setGames([]))
       .finally(() => setLoading(false));
   }, []);
 

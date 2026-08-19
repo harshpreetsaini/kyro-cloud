@@ -128,6 +128,8 @@ export interface GameEntry {
   installState?: "idle" | "installing" | "updating";
   tags?: string[];
   controllerSupport?: "full" | "partial" | "none";
+  downloadSize?: string;
+  systemRequirements?: { minimum?: string; recommended?: string } | null;
   // Legacy fields for backward compatibility
   executable?: string;
   arguments?: string;
