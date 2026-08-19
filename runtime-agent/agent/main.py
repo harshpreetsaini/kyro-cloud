@@ -535,57 +535,130 @@ def _provider_logout(ws, p):
 def _game_install(ws, p):
     """Install a game via the appropriate package manager."""
     import subprocess
+    import re
     game_id = p.get("id", "")
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
+    install_dir = p.get("installDir", "/root/games")
+
+    def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
+        send(ws, "game.install.progress", {
+            "gameId": game_id, "state": state,
+            "percent": round(percent, 1), "downloadedBytes": downloaded,
+            "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta,
+        })
 
     def _do_install():
         try:
-            send(ws, "game.install.progress", {
-                "gameId": game_id, "state": "downloading",
-                "percent": 0, "downloadedBytes": 0, "totalBytes": 0,
-                "speedBytesPerSec": 0, "etaSeconds": 0,
-            })
+            os.makedirs(install_dir, exist_ok=True)
+            _send_progress("checking", 0)
+
             if install_method == "steamcmd" and app_id:
+                _send_progress("downloading", 0)
+                cmd = ["steamcmd", "+login", "anonymous",
+                       f"+app_update {app_id} validate", "+quit"]
                 proc = subprocess.Popen(
-                    ["steamcmd", "+login", "anonymous", f"+app_install {app_id}", "/home/steam/games", "+quit"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                percent = 0
+                total_bytes = 0
+                speed_bps = 0
+                for line in proc.stdout:
+                    lo = line.lower().strip()
+                    # Parse "Downloaded X bytes (Y%)" or similar
+                    dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
+                    if dl_match:
+                        downloaded = int(dl_match.group(1).replace(',', ''))
+                        percent = float(dl_match.group(2))
+                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                        continue
+                    # Parse "Progress: X% (Y / Z) @ Z/s, ETA: ..."
+                    prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
+                    if prog_match:
+                        percent = float(prog_match.group(1))
+                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                        continue
+                    # Parse speed like "12.34 MB/s"
+                    spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
+                    if spd_match:
+                        val = float(spd_match.group(1))
+                        unit = spd_match.group(2)
+                        speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
+                        continue
+                    # Parse total size like "123456789 bytes" or "500.0 MBytes"
+                    size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
+                    if size_match:
+                        total_bytes = int(size_match.group(1).replace(',', ''))
+                        continue
+                    # Fallback: heuristic progress on key lines
+                    if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
+                        percent = min(percent + 2, 95)
+                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+
+                proc.wait()
+                ok = proc.returncode == 0
+
+            elif install_method == "legendary" and app_id:
+                _send_progress("downloading", 0)
+                cmd = ["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"]
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 )
                 percent = 0
                 for line in proc.stdout:
-                    if "downloading" in line.lower() or "installing" in line.lower():
-                        percent = min(percent + 5, 90)
-                        send(ws, "game.install.progress", {
-                            "gameId": game_id, "state": "downloading",
-                            "percent": percent, "downloadedBytes": 0, "totalBytes": 0,
-                            "speedBytesPerSec": 0, "etaSeconds": 0,
-                        })
+                    lo = line.lower().strip()
+                    # Legendary outputs: "[DLManager] Downloading: X% (Y/Z) @ Z/s, ETA: ..."
+                    prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
+                    if prog_match:
+                        percent = float(prog_match.group(1))
+                        _send_progress("downloading", percent)
+                        continue
+                    if any(k in lo for k in ("downloading", "installing", "extracting")):
+                        percent = min(percent + 1, 95)
+                        _send_progress("downloading", percent)
+
                 proc.wait()
                 ok = proc.returncode == 0
-            elif install_method == "legendary" and app_id:
-                proc = subprocess.Popen(
-                    ["legendary", "install", app_id, "--no-https"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
-                proc.wait()
-                ok = proc.returncode == 0
+
             elif install_method == "lgogdownloader" and app_id:
+                _send_progress("downloading", 0)
+                cmd = ["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir]
                 proc = subprocess.Popen(
-                    ["lgogdownloader", "--download", f"--id={app_id}"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 )
+                percent = 0
+                for line in proc.stdout:
+                    lo = line.lower().strip()
+                    prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
+                    if prog_match:
+                        percent = float(prog_match.group(1))
+                        _send_progress("downloading", percent)
+                        continue
+                    if any(k in lo for k in ("downloading", "installing")):
+                        percent = min(percent + 1, 95)
+                        _send_progress("downloading", percent)
+
                 proc.wait()
                 ok = proc.returncode == 0
+
             else:
-                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": f"Install method '{install_method}' not available. Use the desktop to install manually."})
+                send(ws, "game.install.done", {
+                    "gameId": game_id, "success": False,
+                    "error": f"Install method '{install_method}' not available. Connect your gaming account first.",
+                })
                 return
+
             if ok:
-                send(ws, "game.install.progress", {"gameId": game_id, "state": "ready", "percent": 100, "downloadedBytes": 0, "totalBytes": 0, "speedBytesPerSec": 0, "etaSeconds": 0})
+                _send_progress("ready", 100)
                 send(ws, "game.install.done", {"gameId": game_id, "success": True})
             else:
-                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Installation failed"})
+                send(ws, "game.install.done", {
+                    "gameId": game_id, "success": False,
+                    "error": "Installation failed — check the terminal for details",
+                })
         except Exception as ex:
             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": str(ex)})
+
     threading.Thread(target=_do_install, daemon=True).start()
 
 

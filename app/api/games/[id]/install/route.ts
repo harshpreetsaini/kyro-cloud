@@ -13,9 +13,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   // Determine which provider/installer to use
   const provider = game.providers?.[0];
-  const installMethod = provider?.type === "steam" ? "steamcmd" :
-    provider?.name === "Epic Games" ? "legendary" :
-    provider?.name === "GOG" ? "lgogdownloader" : "steamcmd";
+  const launchMethod = provider?.launchMethod || "steam";
+  const installMethod = launchMethod === "epic" ? "legendary" :
+    launchMethod === "gog" ? "lgogdownloader" : "steamcmd";
 
   const appId = (provider as any)?.appId || game.id?.replace(/\D/g, "");
 
