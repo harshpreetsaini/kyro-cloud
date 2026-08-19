@@ -12,7 +12,6 @@ def _run(cmd: str):
 def _cpu_model() -> str | None:
     try:
         import platform
-
         m = platform.processor()
         if m:
             return m
@@ -66,7 +65,6 @@ def _net_rates():
             up = down = 0.0
         _net_rates._prev = (now, cur.bytes_sent, cur.bytes_recv)
 
-        # Calculate network quality from combined throughput
         total_bps = up + down
         if total_bps > 5_000_000:
             quality = "excellent"
@@ -125,8 +123,9 @@ def collect_stats() -> dict:
     stats: dict = {}
     try:
         import psutil
+        import time
 
-        stats["cpuPct"] = psutil.cpu_percent()
+        stats["cpuPct"] = psutil.cpu_percent(interval=0)
         vm = psutil.virtual_memory()
         stats["ramUsedMb"] = vm.used // (1024 * 1024)
         stats["ramTotalMb"] = vm.total // (1024 * 1024)
@@ -141,23 +140,58 @@ def collect_stats() -> dict:
         stats["netUpBps"] = nr["upBps"]
         stats["netDownBps"] = nr["downBps"]
         stats["netState"] = nr["state"]
+        stats["quality"] = nr["quality"]
 
-        # Estimate stream bitrate from network downlink (VNC data flows agent→backend→browser)
         if nr["downBps"] and nr["downBps"] > 0:
             stats["bitrateMbps"] = round(nr["downBps"] * 8 / 1_000_000, 2)
         else:
             stats["bitrateMbps"] = None
 
-        stats["streaming"] = True
+        streaming_active = False
+        fps = None
 
-        # Include GStreamer FPS if available.
+        # Check GStreamer FPS
         try:
             import streaming
             gst_fps = getattr(streaming, '_gstreamer_fps', 0)
             if gst_fps > 0:
-                stats["fps"] = round(gst_fps, 1)
+                fps = round(gst_fps, 1)
+                streaming_active = True
         except Exception:
             pass
+
+        # Check if x11vnc is running (VNC streaming)
+        if not streaming_active:
+            try:
+                r = subprocess.run(["pgrep", "-f", "x11vnc"], capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    streaming_active = True
+            except Exception:
+                pass
+
+        # Check if selkies is running
+        if not streaming_active:
+            try:
+                r = subprocess.run(["pgrep", "-f", "selkies"], capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    streaming_active = True
+            except Exception:
+                pass
+
+        stats["streaming"] = streaming_active
+        if fps is not None:
+            stats["fps"] = fps
+        else:
+            stats["fps"] = None
+
+        # Disk info
+        try:
+            du = psutil.disk_usage("/")
+            stats["storageTotalMb"] = du.total // (1024 * 1024)
+            stats["storageUsedMb"] = du.used // (1024 * 1024)
+        except Exception:
+            pass
+
     except Exception:
         pass
     return stats

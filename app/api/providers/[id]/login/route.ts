@@ -2,31 +2,89 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const origin = new URL(req.url).origin;
+  const body = await req.json().catch(() => ({}));
+  const authCode = body.authCode;
 
-  // OAuth providers - redirect to official login pages
-  const oauthProviders: Record<string, string> = {
-    steam: `https://steamcommunity.com/openid/login?openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.realm=${encodeURIComponent(origin)}&openid.return_to=${encodeURIComponent(`${origin}/api/providers/steam/callback`)}`,
-    epic: `https://www.epicgames.com/id/authorize?client_id=875a544986424806b74309c7c139db15&response_type=code&redirect_uri=${encodeURIComponent(`${origin}/api/providers/epic/callback`)}&scope=basic_profile+identify`,
-    gog: `https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=${encodeURIComponent(`${origin}/api/providers/gog/callback`)}&response_type=code&layout=client2`,
-  };
+  // Providers that use auth-code paste flow
+  const providersUsingAuthCode = ["steam", "epic", "gog", "ubisoft", "ea"];
 
-  const redirectUrl = oauthProviders[id];
+  if (providersUsingAuthCode.includes(id)) {
+    if (!authCode) {
+      // Return instructions for the user
+      const instructions: Record<string, { title: string; steps: string[]; note?: string }> = {
+        steam: {
+          title: "Login to Steam",
+          steps: [
+            "Open Steam on your PC (or web browser)",
+            "Make sure you are logged in",
+            "Copy your Steam ID (numeric, e.g. 76561198012345678)",
+            "Find it at: steamcommunity.com/id/YOURNAME → right-click → Copy Page URL",
+            "The number after /id/ is your Steam ID",
+            "Paste it below",
+          ],
+          note: "Anonymous login is used for free games. For paid games, provide your Steam ID.",
+        },
+        epic: {
+          title: "Login to Epic Games",
+          steps: [
+            "Open a terminal on your Colab runtime",
+            "Run: legendary auth",
+            "Follow the instructions to log in",
+            "Copy the authorization code that appears",
+            "Paste it below",
+          ],
+          note: "legendary is the open-source Epic Games launcher.",
+        },
+        gog: {
+          title: "Login to GOG",
+          steps: [
+            "Open a terminal on your Colab runtime",
+            "Run: lgogdownloader --login",
+            "Follow the instructions to log in",
+            "Copy the authentication code that appears",
+            "Paste it below",
+          ],
+          note: "lgogdownloader is the open-source GOG downloader.",
+        },
+        ubisoft: {
+          title: "Login to Ubisoft Connect",
+          steps: [
+            "Ubisoft Connect requires manual authentication.",
+            "Your games will be available when the agent is connected.",
+          ],
+          note: "Coming soon - Ubisoft Connect integration.",
+        },
+        ea: {
+          title: "Login to EA App",
+          steps: [
+            "EA App requires manual authentication.",
+            "Your games will be available when the agent is connected.",
+          ],
+          note: "Coming soon - EA App integration.",
+        },
+      };
 
-  if (redirectUrl) {
+      return NextResponse.json({
+        ok: true,
+        data: { provider: id, method: "auth_code", instructions: instructions[id] || { title: "Login", steps: ["Paste your auth code below"] } },
+      });
+    }
+
+    // Save the auth code to a file the agent can read
+    const fs = require("fs");
+    const path = require("path");
+    const authDir = path.join(process.cwd(), ".auth");
+    if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, `${id}_auth.txt`), authCode);
+
     return NextResponse.json({
       ok: true,
-      data: { redirectUrl, provider: id, method: "oauth" },
+      data: { provider: id, method: "auth_code", status: "saved", message: "Auth code saved. Agent will use it on next sync." },
     });
   }
 
-  // For other providers, return info about the flow
   return NextResponse.json({
-    ok: true,
-    data: {
-      provider: id,
-      method: "agent",
-      message: `${id} requires agent-based login. Make sure the Colab runtime is connected.`,
-    },
+    ok: false,
+    error: `Provider ${id} not supported`,
   });
 }

@@ -495,26 +495,31 @@ def _provider_login(ws, p):
 def _provider_sync(ws, p):
     """Sync game library from a connected provider."""
     import subprocess
+    import configparser
     provider = p.get("provider", "steam")
     steam_id = p.get("steamId")
     access_token = p.get("accessToken")
     username = p.get("username")
 
+    # Read auth code from file if available
+    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
+    auth_code = ""
+    if os.path.exists(auth_file):
+        try:
+            with open(auth_file) as f:
+                auth_code = f.read().strip()
+        except Exception:
+            pass
+
     def _do_sync():
         try:
             games = []
             if provider == "steam":
-                # Try logged-in user first, fall back to anonymous
-                login_args = ["steamcmd", "+login"]
-                if steam_id:
-                    # Use steamid for anonymous login (shows free games)
-                    login_args.extend(["anonymous"])
-                else:
-                    login_args.extend(["anonymous"])
-                login_args.extend(["+apps_list", "+quit"])
-
+                # Try with auth code first (user's Steam ID for owned games)
+                login_user = steam_id or auth_code or "anonymous"
                 result = subprocess.run(
-                    login_args, capture_output=True, text=True, timeout=120,
+                    ["steamcmd", "+login", login_user, "+apps_list", "+quit"],
+                    capture_output=True, text=True, timeout=120,
                 )
                 for line in result.stdout.split("\n"):
                     line = line.strip()
@@ -523,11 +528,12 @@ def _provider_sync(ws, p):
                         if len(parts) == 2:
                             games.append({"appId": parts[0], "name": parts[1]})
 
-                # If we have a steam_id, try to get owned games via the API
-                if steam_id and not games:
+                # If we have a steam_id, try Steam Web API for owned games
+                if (steam_id or auth_code) and not games:
+                    sid = steam_id or auth_code
                     try:
                         import urllib.request
-                        url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={steam_id}&include_appinfo=1&format=json"
+                        url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={sid}&include_appinfo=1&format=json"
                         with urllib.request.urlopen(url, timeout=15) as resp:
                             data = json.loads(resp.read())
                             for g in data.get("response", {}).get("games", []):
@@ -535,33 +541,35 @@ def _provider_sync(ws, p):
                     except Exception:
                         pass
 
+                # If still no games, try anonymous (free games)
+                if not games:
+                    result = subprocess.run(
+                        ["steamcmd", "+login", "anonymous", "+apps_list", "+quit"],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    for line in result.stdout.split("\n"):
+                        line = line.strip()
+                        if line and line[0].isdigit() and "\t" in line:
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                games.append({"appId": parts[0], "name": parts[1]})
+
             elif provider == "epic":
                 # Install legendary if not present
                 subprocess.run(["pip3", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
 
-                if access_token:
-                    # Write token config for legendary
-                    legendary_config_dir = os.path.expanduser("~/.config/legendary")
-                    os.makedirs(legendary_config_dir, exist_ok=True)
-                    config_path = os.path.join(legendary_config_dir, "config.ini")
-                    try:
-                        import configparser
-                        config = configparser.ConfigParser()
-                        if os.path.exists(config_path):
-                            config.read(config_path)
-                        if "Legendary" not in config:
-                            config["Legendary"] = {}
-                        config["Legendary"]["egl_program_id"] = ""
-                        with open(config_path, "w") as f:
-                            config.write(f)
-                    except Exception:
-                        pass
-
-                    # Use token to authenticate
+                # Try to authenticate with auth code
+                if auth_code:
                     result = subprocess.run(
-                        ["legendary", "auth", "--token", access_token],
+                        ["legendary", "auth", "--code", auth_code],
                         capture_output=True, text=True, timeout=60,
                     )
+                    # If code doesn't work, try as token
+                    if result.returncode != 0 and len(auth_code) > 100:
+                        result = subprocess.run(
+                            ["legendary", "auth", "--token", auth_code],
+                            capture_output=True, text=True, timeout=60,
+                        )
 
                 # List games
                 result = subprocess.run(
@@ -578,14 +586,30 @@ def _provider_sync(ws, p):
                         if app_id and name:
                             games.append({"appId": app_id, "name": name})
 
+                # If legendary not installed or failed, check if it's available
+                if not games and result.returncode != 0:
+                    send(ws, "provider.library", {
+                        "provider": provider,
+                        "games": [],
+                        "count": 0,
+                        "error": f"legendary not available. Run 'legendary auth' on your Colab runtime to authenticate.",
+                        "instructions": "Run: pip install legendary-gl && legendary auth"
+                    })
+                    return
+
             elif provider == "gog":
                 # Install lgogdownloader if not present
                 subprocess.run(["pip3", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
 
-                if access_token:
-                    # Write token for lgogdownloader
+                # Try to authenticate with auth code
+                if auth_code:
+                    # lgogdownloader uses a config file for auth
                     gog_config_dir = os.path.expanduser("~/.config/lgogdownloader")
                     os.makedirs(gog_config_dir, exist_ok=True)
+                    # Write the auth code to a temp file for lgogdownloader
+                    auth_tmp = os.path.join(gog_config_dir, "auth_code.txt")
+                    with open(auth_tmp, "w") as f:
+                        f.write(auth_code)
 
                 # List games
                 result = subprocess.run(
@@ -599,6 +623,17 @@ def _provider_sync(ws, p):
                         name = parts[1].strip()
                         if app_id and name and app_id.isdigit():
                             games.append({"appId": app_id, "name": name})
+
+                # If lgogdownloader not available
+                if not games and result.returncode != 0:
+                    send(ws, "provider.library", {
+                        "provider": provider,
+                        "games": [],
+                        "count": 0,
+                        "error": f"lgogdownloader not available. Run 'lgogdownloader --login' on your Colab runtime to authenticate.",
+                        "instructions": "Run: pip install lgogdownloader && lgogdownloader --login"
+                    })
+                    return
 
             send(ws, "provider.library", {"provider": provider, "games": games, "count": len(games)})
         except Exception as ex:
@@ -621,6 +656,17 @@ def _game_install(ws, p):
     app_id = p.get("appId") or p.get("steamAppId", "")
     install_dir = p.get("installDir", "/root/games")
 
+    # Read auth code from file
+    auth_code = ""
+    for provider in ["steam", "epic", "gog"]:
+        auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
+        if os.path.exists(auth_file):
+            try:
+                with open(auth_file) as f:
+                    auth_code = f.read().strip()
+            except Exception:
+                pass
+
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {
             "gameId": game_id, "state": state,
@@ -635,7 +681,9 @@ def _game_install(ws, p):
 
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
-                cmd = ["steamcmd", "+login", "anonymous",
+                # Use auth code (Steam ID) if available, otherwise anonymous
+                login_user = auth_code if auth_code else "anonymous"
+                cmd = ["steamcmd", "+login", login_user,
                        f"+app_update {app_id} validate", "+quit"]
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -645,32 +693,27 @@ def _game_install(ws, p):
                 speed_bps = 0
                 for line in proc.stdout:
                     lo = line.lower().strip()
-                    # Parse "Downloaded X bytes (Y%)" or similar
                     dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
                     if dl_match:
                         downloaded = int(dl_match.group(1).replace(',', ''))
                         percent = float(dl_match.group(2))
                         _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
                         continue
-                    # Parse "Progress: X% (Y / Z) @ Z/s, ETA: ..."
                     prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
                         percent = float(prog_match.group(1))
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                         continue
-                    # Parse speed like "12.34 MB/s"
                     spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
                     if spd_match:
                         val = float(spd_match.group(1))
                         unit = spd_match.group(2)
                         speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
                         continue
-                    # Parse total size like "123456789 bytes" or "500.0 MBytes"
                     size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
                     if size_match:
                         total_bytes = int(size_match.group(1).replace(',', ''))
                         continue
-                    # Fallback: heuristic progress on key lines
                     if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
                         percent = min(percent + 2, 95)
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
@@ -687,7 +730,6 @@ def _game_install(ws, p):
                 percent = 0
                 for line in proc.stdout:
                     lo = line.lower().strip()
-                    # Legendary outputs: "[DLManager] Downloading: X% (Y/Z) @ Z/s, ETA: ..."
                     prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
                         percent = float(prog_match.group(1))

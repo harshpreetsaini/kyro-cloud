@@ -14,18 +14,19 @@ interface Provider {
   loggedIn: boolean;
   username?: string;
   gameCount?: number;
-  method: "oauth" | "agent" | "coming";
+  method: "auth_code" | "coming";
+  installMethod: string;
 }
 
-const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount">[] = [
-  { id: "steam", name: "Steam", icon: "🎮", description: "Valve's gaming platform — 50,000+ games", color: "from-blue-600 to-blue-800", method: "oauth" },
-  { id: "epic", name: "Epic Games", icon: "🎯", description: "Epic Games Store — exclusives + free weekly games", color: "from-gray-700 to-gray-900", method: "oauth" },
-  { id: "gog", name: "GOG", icon: "💎", description: "DRM-free games — you own what you buy", color: "from-purple-600 to-purple-800", method: "oauth" },
-  { id: "ubisoft", name: "Ubisoft Connect", icon: "🌀", description: "Assassin's Creed, Far Cry, Rainbow Six", color: "from-blue-500 to-cyan-600", method: "coming" },
-  { id: "ea", name: "EA App", icon: "🏆", description: "FIFA, Battlefield, Need for Speed, Jedi", color: "from-blue-700 to-indigo-800", method: "coming" },
-  { id: "xbox", name: "Xbox / Game Pass", icon: "🟢", description: "Game Pass library — hundreds of games", color: "from-green-600 to-green-800", method: "coming" },
-  { id: "battle", name: "Battle.net", icon: "⚔️", description: "Diablo, WoW, Overwatch, StarCraft", color: "from-blue-600 to-blue-700", method: "coming" },
-  { id: "riot", name: "Riot Client", icon: "🔥", description: "League of Legends, Valorant, TFT", color: "from-red-600 to-red-800", method: "coming" },
+const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount" | "method" | "installMethod">[] = [
+  { id: "steam", name: "Steam", icon: "🎮", description: "Valve's gaming platform — 50,000+ games", color: "from-blue-600 to-blue-800" },
+  { id: "epic", name: "Epic Games", icon: "🎯", description: "Epic Games Store — exclusives + free weekly games", color: "from-gray-700 to-gray-900" },
+  { id: "gog", name: "GOG", icon: "💎", description: "DRM-free games — you own what you buy", color: "from-purple-600 to-purple-800" },
+  { id: "ubisoft", name: "Ubisoft Connect", icon: "🌀", description: "Assassin's Creed, Far Cry, Rainbow Six", color: "from-blue-500 to-cyan-600" },
+  { id: "ea", name: "EA App", icon: "🏆", description: "FIFA, Battlefield, Need for Speed, Jedi", color: "from-blue-700 to-indigo-800" },
+  { id: "xbox", name: "Xbox / Game Pass", icon: "🟢", description: "Game Pass library — hundreds of games", color: "from-green-600 to-green-800" },
+  { id: "battle", name: "Battle.net", icon: "⚔️", description: "Diablo, WoW, Overwatch, StarCraft", color: "from-blue-600 to-blue-700" },
+  { id: "riot", name: "Riot Client", icon: "🔥", description: "League of Legends, Valorant, TFT", color: "from-red-600 to-red-800" },
 ];
 
 export default function ProvidersPage() {
@@ -34,20 +35,22 @@ export default function ProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [authModal, setAuthModal] = useState<string | null>(null);
+  const [authCode, setAuthCode] = useState("");
+  const [authInstructions, setAuthInstructions] = useState<{ title: string; steps: string[]; note?: string } | null>(null);
+  const [authSaving, setAuthSaving] = useState(false);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check URL for OAuth callback results
     const params = new URLSearchParams(window.location.search);
     const success = params.get("success");
     const error = params.get("error");
-    if (success) setLoginError(null);
-    if (error) setLoginError(`Authentication failed: ${error}`);
-
-    // Clean URL
-    if (success || error) {
-      window.history.replaceState({}, "", "/providers");
+    if (success) {
+      setAuthSuccess(success);
+      setTimeout(() => setAuthSuccess(null), 3000);
     }
-
+    if (error) setLoginError(`Authentication failed: ${error}`);
+    if (success || error) window.history.replaceState({}, "", "/providers");
     fetchProviders();
   }, []);
 
@@ -56,35 +59,31 @@ export default function ProvidersPage() {
       const res = await fetch("/api/providers", { headers: { ...authHeader() } });
       const data = await res.json();
       if (data.ok && data.data) {
-        // Check cookies for actual login state
         const enriched = data.data.map((p: Provider) => {
           const cookieName = `provider_${p.id}`;
           const cookieMatch = document.cookie.match(new RegExp(`(?:^|; )${cookieName}=([^;]*)`));
           if (cookieMatch) {
             try {
               const session = JSON.parse(decodeURIComponent(cookieMatch[1]));
-              return {
-                ...p,
-                loggedIn: true,
-                username: session.displayName || session.username || session.name || session.steamId || p.username,
-              };
+              return { ...p, loggedIn: true, username: session.displayName || session.username || session.name || session.steamId || p.username };
             } catch {}
           }
-          return p;
+          return { ...p, loggedIn: false };
         });
         setProviders(enriched);
       } else {
-        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false })));
+        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "auth_code", installMethod: "steamcmd" })));
       }
     } catch {
-      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false })));
+      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "auth_code", installMethod: "steamcmd" })));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleOAuthLogin = async (providerId: string) => {
+  const handleLogin = async (providerId: string) => {
     setLoginError(null);
+    setAuthCode("");
     try {
       const res = await fetch(`/api/providers/${providerId}/login`, {
         method: "POST",
@@ -92,13 +91,41 @@ export default function ProvidersPage() {
         body: JSON.stringify({}),
       });
       const data = await res.json();
-      if (data.ok && data.data?.redirectUrl) {
-        window.location.href = data.data.redirectUrl;
-      } else {
-        setLoginError(data.data?.message || "Login failed");
+      if (data.ok && data.data) {
+        if (data.data.instructions) {
+          setAuthInstructions(data.data.instructions);
+        }
+        setAuthModal(providerId);
       }
     } catch {
-      setLoginError("Connection failed. Is the runtime connected?");
+      setLoginError("Connection failed");
+    }
+  };
+
+  const handleSubmitAuthCode = async () => {
+    if (!authModal || !authCode.trim()) return;
+    setAuthSaving(true);
+    try {
+      const res = await fetch(`/api/providers/${authModal}/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ authCode: authCode.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        // Save session cookie
+        const sessionData = { displayName: authCode.trim(), connectedAt: new Date().toISOString() };
+        document.cookie = `provider_${authModal}=${encodeURIComponent(JSON.stringify(sessionData))}; path=/; max-age=${86400 * 30}`;
+        setAuthModal(null);
+        setAuthSuccess(authModal);
+        fetchProviders();
+      } else {
+        setLoginError(data.error || "Failed to save auth code");
+      }
+    } catch {
+      setLoginError("Failed to save auth code");
+    } finally {
+      setAuthSaving(false);
     }
   };
 
@@ -117,15 +144,8 @@ export default function ProvidersPage() {
   };
 
   const handleLogout = async (providerId: string) => {
-    try {
-      await fetch(`/api/providers/${providerId}/logout`, {
-        method: "POST",
-        headers: { ...authHeader() },
-      });
-      // Clear cookie
-      document.cookie = `provider_${providerId}=; path=/; max-age=0`;
-      fetchProviders();
-    } catch {}
+    document.cookie = `provider_${providerId}=; path=/; max-age=0`;
+    fetchProviders();
   };
 
   if (loading) {
@@ -160,6 +180,12 @@ export default function ProvidersPage() {
         </div>
       )}
 
+      {authSuccess && (
+        <div className="panel p-4 border border-green-500/20 bg-green-500/5">
+          <p className="text-sm text-green-400">✓ {authSuccess} connected successfully</p>
+        </div>
+      )}
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {providers.map((provider) => (
           <div key={provider.id} className="panel p-5 flex flex-col gap-4">
@@ -186,7 +212,7 @@ export default function ProvidersPage() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted">Account</span>
-                  <span>{provider.username}</span>
+                  <span className="truncate max-w-[120px]">{provider.username}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted">Games Owned</span>
@@ -201,18 +227,65 @@ export default function ProvidersPage() {
                   </Button>
                 </div>
               </div>
-            ) : provider.method === "oauth" ? (
-              <Button size="sm" className="w-full" onClick={() => handleOAuthLogin(provider.id)}>
-                Login with {provider.name}
-              </Button>
-            ) : (
+            ) : provider.method === "coming" ? (
               <Button size="sm" variant="secondary" className="w-full" disabled>
                 Coming Soon
+              </Button>
+            ) : (
+              <Button size="sm" className="w-full" onClick={() => handleLogin(provider.id)}>
+                Login with {provider.name}
               </Button>
             )}
           </div>
         ))}
       </div>
+
+      {/* Auth Code Modal */}
+      {authModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="panel p-6 w-full max-w-lg mx-4 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg">{authInstructions?.title || `Login to ${authModal}`}</h3>
+              <button onClick={() => setAuthModal(null)} className="text-muted hover:text-white text-lg">✕</button>
+            </div>
+
+            {authInstructions?.steps && (
+              <div className="text-sm text-muted space-y-2">
+                {authInstructions.steps.map((step, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-accent font-mono">{i + 1}.</span>
+                    <span>{step}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {authInstructions?.note && (
+              <p className="text-xs text-muted/70 italic">{authInstructions.note}</p>
+            )}
+
+            <div>
+              <label className="text-sm text-muted mb-1 block">Paste your auth code / Steam ID:</label>
+              <input
+                type="text"
+                value={authCode}
+                onChange={(e) => setAuthCode(e.target.value)}
+                placeholder={authModal === "steam" ? "76561198012345678" : "Paste auth code here"}
+                className="w-full bg-muted/10 border border-muted/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" className="flex-1" onClick={() => setAuthModal(null)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="flex-1" onClick={handleSubmitAuthCode} disabled={!authCode.trim() || authSaving}>
+                {authSaving ? "Saving..." : "Connect"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* How it works */}
       <div className="panel p-5">
@@ -220,15 +293,15 @@ export default function ProvidersPage() {
         <div className="grid sm:grid-cols-3 gap-4 text-sm text-muted">
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">01</span>
-            <p>Click Login and sign in through the official provider page (Steam, Epic, GOG)</p>
+            <p>Click Login and follow the instructions to get your auth code from the provider</p>
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">02</span>
-            <p>Sync your library — owned games appear in your Library tab</p>
+            <p>Paste the auth code and click Connect — your session is saved</p>
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">03</span>
-            <p>Click Install on any owned game — it downloads to your cloud PC</p>
+            <p>Click Sync Library to fetch your games — then install from the Library tab</p>
           </div>
         </div>
       </div>

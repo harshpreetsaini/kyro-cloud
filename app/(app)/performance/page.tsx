@@ -242,10 +242,12 @@ function SystemInfoCard({ systemInfo }: { systemInfo: any }) {
 export default function PerformancePage() {
   const { stats, systemInfo, statsHistory } = useRuntime();
   const phase = useCloudPhase();
+  const { connected } = useRuntime();
 
   const hasTelemetry = stats?.gpuPct != null || stats?.cpuPct != null || stats?.ramUsedMb != null;
+  const showDashboard = connected || phase === "online" || phase === "ready";
 
-  if (phase !== "online") {
+  if (!showDashboard) {
     return (
       <div className="flex flex-col gap-4">
         <h2 className="font-display text-xl">Performance</h2>
