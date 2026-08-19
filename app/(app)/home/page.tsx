@@ -66,7 +66,7 @@ export default function HomePage() {
                   <span key={g.id} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name}</span>
                 ))}
                 {heroGame.rating && (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {heroGame.rating.toFixed(1)}</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {Number(heroGame.rating).toFixed(1)}</span>
                 )}
               </div>
               <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">{heroGame.name}</h1>

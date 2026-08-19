@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession, SESSION_COOKIE } from "./lib/auth/jwt";
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/games/screenshots"];
 
 function applyCors(res: NextResponse, origin: string | null) {
   const allowed = process.env.FRONTEND_URL || "*";

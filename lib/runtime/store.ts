@@ -64,6 +64,7 @@ const listeners = new Set<() => void>();
 let ws: WebSocket | null = null;
 let retry = 0;
 let started = false;
+let pingInterval: ReturnType<typeof setInterval> | null = null;
 
 function emit() {
   snapshot = { ...state };
@@ -92,10 +93,18 @@ function connect() {
     state = { ...state, connected: true };
     retry = 0;
     emit();
+    // Send keepalive ping every 30 seconds to prevent disconnection
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+      }
+    }, 30000);
   };
   ws.onclose = () => {
     state = { ...state, connected: false };
     emit();
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (started) {
       retry += 1;
       setTimeout(connect, Math.min(1000 * retry, 5000));
@@ -189,6 +198,13 @@ function connect() {
         emit();
         break;
       }
+      case "ping": {
+        // Respond to server keepalive ping
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+        }
+        break;
+      }
       case "game.install.progress": {
         const p = event.payload as InstallProgress;
         state = { ...state, installProgress: { ...state.installProgress, [p.gameId]: p } };
@@ -244,11 +260,22 @@ export function runtimeInstallGame(id: string) {
   };
   emit();
 
-  fetch(api(`/api/games/${id}/install`), {
+  // Call Vercel API (relative path) for install, NOT the Render backend
+  fetch(`/api/games/${id}/install`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader() },
+  }).then(r => r.json()).then(data => {
+    if (!data.ok) {
+      state = {
+        ...state,
+        installProgress: {
+          ...state.installProgress,
+          [id]: { gameId: id, state: "error", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0, error: data.error || "Failed to start installation" },
+        },
+      };
+      emit();
+    }
   }).catch(() => {
-    // If API fails, show error state
     state = {
       ...state,
       installProgress: {
@@ -261,7 +288,7 @@ export function runtimeInstallGame(id: string) {
 }
 
 export function runtimeUninstallGame(id: string) {
-  fetch(api(`/api/games/${id}/uninstall`), {
+  fetch(`/api/games/${id}/uninstall`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader() },
   }).then(() => {

@@ -19,7 +19,7 @@ export function GameCard({
 }) {
   const [imgError, setImgError] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const installing = game.installState === "installing" || game.installState === "updating";
+  const installing = (game as any).installState === "installing" || (game as any).installState === "updating";
   const primaryProvider = game.providers?.[0];
 
   return (
@@ -56,7 +56,7 @@ export function GameCard({
           )}
 
           {/* Rating */}
-          {game.rating && (
+          {typeof game.rating === "number" && !isNaN(game.rating) && (
             <span className="absolute top-2 right-2 text-[11px] text-yellow-400 bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
               ★ {game.rating.toFixed(1)}
             </span>

@@ -57,7 +57,7 @@ export default function GameDetailsPage() {
   const fetchScreenshots = async (appId: string) => {
     setLoadingScreenshots(true);
     try {
-      const res = await fetch(api(`/api/games/screenshots?appId=${appId}`));
+      const res = await fetch(`/api/games/screenshots?appId=${appId}`);
       const data = await res.json();
       if (data.screenshots && data.screenshots.length > 0) {
         setRealScreenshots(data.screenshots.map((s: any) => s.path_full || s.path_thin_crop));
@@ -179,7 +179,7 @@ export default function GameDetailsPage() {
                 <span key={g.id} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name}</span>
               ))}
               {game.rating && (
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {game.rating.toFixed(1)}</span>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {Number(game.rating).toFixed(1)}</span>
               )}
               {game.metacritic && (
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent/20 text-accent font-medium">MC {game.metacritic}</span>
@@ -368,7 +368,7 @@ export default function GameDetailsPage() {
               {game.releaseDate && <InfoRow label="Release" value={new Date(game.releaseDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })} />}
               {game.developer && <InfoRow label="Developer" value={game.developer} />}
               {game.publisher && <InfoRow label="Publisher" value={game.publisher} />}
-              {game.rating && <InfoRow label="Rating" value={`★ ${game.rating.toFixed(1)}`} />}
+              {typeof game.rating === "number" && !isNaN(game.rating) && <InfoRow label="Rating" value={`★ ${game.rating.toFixed(1)}`} />}
               {game.metacritic && <InfoRow label="Metacritic" value={String(game.metacritic)} />}
             </div>
           </div>
