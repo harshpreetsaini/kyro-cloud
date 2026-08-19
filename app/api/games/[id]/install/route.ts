@@ -11,6 +11,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const manager = getManager();
 
+  // Determine which provider/installer to use
+  const provider = game.providers?.[0];
+  const installMethod = provider?.type === "steam" ? "steamcmd" :
+    provider?.name === "Epic Games" ? "legendary" :
+    provider?.name === "GOG" ? "lgogdownloader" : "steamcmd";
+
+  const appId = (provider as any)?.appId || game.id?.replace(/\D/g, "");
+
   // Send install command to the runtime agent
   if (manager.sendToAgent) {
     manager.sendToAgent({
@@ -18,9 +26,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       payload: {
         id: game.id,
         name: game.name,
-        provider: game.providers?.[0]?.type || "steam",
-        providerAppId: (game.providers?.[0] as any)?.appId,
-        providerName: game.providers?.[0]?.name,
+        installMethod,
+        provider: provider?.type || "steam",
+        providerName: provider?.name || "Steam",
+        appId: appId,
+        steamAppId: appId,
       },
     });
   }
@@ -33,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       id: game.id,
       name: game.name,
       status: "installing",
-      message: `Installation started for ${game.name}`,
+      message: `Installation started for ${game.name} via ${installMethod}`,
     },
   });
 }

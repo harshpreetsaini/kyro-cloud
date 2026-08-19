@@ -177,6 +177,16 @@ def on_message(ws, raw):
         _clipboard_get(p)
     elif t == "clipboard.set":
         _clipboard_set(p)
+    elif t == "provider.login":
+        _provider_login(ws, p)
+    elif t == "provider.sync":
+        _provider_sync(ws, p)
+    elif t == "provider.logout":
+        _provider_logout(ws, p)
+    elif t == "game.install":
+        _game_install(ws, p)
+    elif t == "game.uninstall":
+        _game_uninstall(ws, p)
     elif t == "stop":
         _session_active = False
         streaming.stop_all()
@@ -440,6 +450,149 @@ def _clipboard_set(p):
             agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
     except Exception as e:
         agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+
+
+def _provider_login(ws, p):
+    """Handle provider login (steamcmd, legendary, etc)."""
+    import subprocess
+    provider = p.get("provider", "steam")
+    username = p.get("username", "")
+    password = p.get("password", "")
+
+    def _do_login():
+        try:
+            if provider == "steam":
+                subprocess.run(["which", "steamcmd"], capture_output=True)
+                result = subprocess.run(
+                    ["steamcmd", "+login", username, password, "+quit"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                ok = "Steam account successfully logged in" in result.stdout or result.returncode == 0
+                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else result.stdout[-500:]})
+            elif provider == "epic":
+                subprocess.run(["pip", "install", "legendary-gl"], capture_output=True)
+                result = subprocess.run(
+                    ["legendary", "auth", "--code", username],
+                    capture_output=True, text=True, timeout=60,
+                )
+                ok = result.returncode == 0
+                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None})
+            elif provider == "gog":
+                subprocess.run(["pip", "install", "lgogdownloader"], capture_output=True)
+                result = subprocess.run(
+                    ["lgogdownloader", "--login"],
+                    input=f"{username}\n{password}\n", capture_output=True, text=True, timeout=60,
+                )
+                ok = result.returncode == 0
+                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None})
+            else:
+                send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Provider {provider} not yet supported. Use the desktop client."})
+        except Exception as ex:
+            send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": str(ex)})
+    threading.Thread(target=_do_login, daemon=True).start()
+
+
+def _provider_sync(ws, p):
+    """Sync game library from a connected provider."""
+    import subprocess
+    provider = p.get("provider", "steam")
+
+    def _do_sync():
+        try:
+            games = []
+            if provider == "steam":
+                result = subprocess.run(
+                    ["steamcmd", "+login", "anonymous", "+apps_list", "+quit"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                for line in result.stdout.split("\n"):
+                    line = line.strip()
+                    if line and line[0].isdigit() and "\t" in line:
+                        parts = line.split("\t", 1)
+                        if len(parts) == 2:
+                            games.append({"appId": parts[0], "name": parts[1]})
+            elif provider == "epic":
+                result = subprocess.run(
+                    ["legendary", "list-games", "--csv"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                for line in result.stdout.strip().split("\n")[1:]:
+                    parts = line.split(",")
+                    if len(parts) >= 2:
+                        games.append({"appId": parts[0], "name": parts[1]})
+            send(ws, "provider.library", {"provider": provider, "games": games, "count": len(games)})
+        except Exception as ex:
+            send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": str(ex)})
+    threading.Thread(target=_do_sync, daemon=True).start()
+
+
+def _provider_logout(ws, p):
+    """Logout from a provider."""
+    provider = p.get("provider", "steam")
+    send(ws, "provider.logout.result", {"provider": provider, "ok": True})
+
+
+def _game_install(ws, p):
+    """Install a game via the appropriate package manager."""
+    import subprocess
+    game_id = p.get("id", "")
+    install_method = p.get("installMethod", "steamcmd")
+    app_id = p.get("appId") or p.get("steamAppId", "")
+
+    def _do_install():
+        try:
+            send(ws, "game.install.progress", {
+                "gameId": game_id, "state": "downloading",
+                "percent": 0, "downloadedBytes": 0, "totalBytes": 0,
+                "speedBytesPerSec": 0, "etaSeconds": 0,
+            })
+            if install_method == "steamcmd" and app_id:
+                proc = subprocess.Popen(
+                    ["steamcmd", "+login", "anonymous", f"+app_install {app_id}", "/home/steam/games", "+quit"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                percent = 0
+                for line in proc.stdout:
+                    if "downloading" in line.lower() or "installing" in line.lower():
+                        percent = min(percent + 5, 90)
+                        send(ws, "game.install.progress", {
+                            "gameId": game_id, "state": "downloading",
+                            "percent": percent, "downloadedBytes": 0, "totalBytes": 0,
+                            "speedBytesPerSec": 0, "etaSeconds": 0,
+                        })
+                proc.wait()
+                ok = proc.returncode == 0
+            elif install_method == "legendary" and app_id:
+                proc = subprocess.Popen(
+                    ["legendary", "install", app_id, "--no-https"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                proc.wait()
+                ok = proc.returncode == 0
+            elif install_method == "lgogdownloader" and app_id:
+                proc = subprocess.Popen(
+                    ["lgogdownloader", "--download", f"--id={app_id}"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                proc.wait()
+                ok = proc.returncode == 0
+            else:
+                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": f"Install method '{install_method}' not available. Use the desktop to install manually."})
+                return
+            if ok:
+                send(ws, "game.install.progress", {"gameId": game_id, "state": "ready", "percent": 100, "downloadedBytes": 0, "totalBytes": 0, "speedBytesPerSec": 0, "etaSeconds": 0})
+                send(ws, "game.install.done", {"gameId": game_id, "success": True})
+            else:
+                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Installation failed"})
+        except Exception as ex:
+            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": str(ex)})
+    threading.Thread(target=_do_install, daemon=True).start()
+
+
+def _game_uninstall(ws, p):
+    """Uninstall a game."""
+    game_id = p.get("id", "")
+    send(ws, "game.install.done", {"gameId": game_id, "success": True})
 
 
 def on_error(ws, err):

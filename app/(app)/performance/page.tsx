@@ -69,7 +69,7 @@ function GpuCard({ systemInfo }: { systemInfo: any }) {
         <InfoRow label="Driver" value={gpu.driver} />
         <InfoRow label="Temperature" value={gpu.temperatureC != null ? `${gpu.temperatureC}°C` : null} badge={gpu.temperatureC != null && gpu.temperatureC > 80 ? "Hot" : undefined} />
         <InfoRow label="Utilization" value={gpu.utilizationPct != null ? `${gpu.utilizationPct}%` : null} />
-        <InfoRow label="Memory Utilization" value={gpu.memoryUtilPct != null ? `${gpu.memoryUtilizationPct}%` : null} />
+        <InfoRow label="Memory Utilization" value={gpu.memoryUtilPct != null ? `${gpu.memoryUtilPct}%` : null} />
       </div>
     </div>
   );

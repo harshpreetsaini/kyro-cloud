@@ -29,6 +29,21 @@ export default function HomePage() {
   const installed = games.filter((g) => g.installed).slice(0, 6);
   const heroGame = popular[0];
 
+  // Free-to-play games (no steam app required or marked as free)
+  const freeGames = games.filter((g) =>
+    g.tags?.some((t) => t.toLowerCase().includes("free")) ||
+    g.tags?.some((t) => t.toLowerCase().includes("free to play")) ||
+    g.description?.toLowerCase().includes("free-to-play") ||
+    g.shortDescription?.toLowerCase().includes("free-to-play")
+  ).slice(0, 12);
+
+  // Games by platform
+  const steamGames = games.filter((g) => g.providers?.some((p) => p.name === "Steam")).slice(0, 8);
+  const epicGames = games.filter((g) => g.providers?.some((p) => p.name === "Epic Games")).slice(0, 8);
+  const gogGames = games.filter((g) => g.providers?.some((p) => p.name === "GOG")).slice(0, 8);
+  const xboxGames = games.filter((g) => g.providers?.some((p) => p.name?.includes("Xbox"))).slice(0, 8);
+  const psGames = games.filter((g) => g.providers?.some((p) => p.name?.includes("PlayStation"))).slice(0, 8);
+
   if (loading) {
     return (
       <div className="flex flex-col gap-8">
@@ -145,6 +160,89 @@ export default function HomePage() {
             <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
           ))}
         </div>
+      </section>
+
+      {/* Free to Play */}
+      {freeGames.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Free to Play</h2>
+            <span className="text-xs text-muted bg-green-500/10 text-green-400 px-2 py-0.5 rounded-full">No purchase needed</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {freeGames.map((game) => (
+              <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* By Platform */}
+      {steamGames.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Steam Collection</h2>
+            <Link href="/games" className="text-sm text-accent hover:underline">View All</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {steamGames.map((game) => (
+              <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {epicGames.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Epic Games</h2>
+            <Link href="/providers" className="text-sm text-accent hover:underline">Connect Epic</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {epicGames.map((game) => (
+              <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {psGames.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">PlayStation PC</h2>
+            <Link href="/games" className="text-sm text-accent hover:underline">View All</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {psGames.map((game) => (
+              <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {xboxGames.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Xbox / Game Pass</h2>
+            <Link href="/providers" className="text-sm text-accent hover:underline">Connect Xbox</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {xboxGames.map((game) => (
+              <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Connect Providers CTA */}
+      <section className="panel p-6 flex flex-col sm:flex-row items-center gap-4">
+        <div className="flex-1">
+          <h3 className="font-semibold text-lg">Connect Your Gaming Accounts</h3>
+          <p className="text-sm text-muted mt-1">Link Steam, Epic, GOG, Xbox and more to access your full game library</p>
+        </div>
+        <Link href="/providers">
+          <Button>Connect Providers</Button>
+        </Link>
       </section>
     </div>
   );

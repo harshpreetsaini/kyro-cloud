@@ -19,11 +19,13 @@ const NAV = [
     items: [
       { href: "/library", label: "My Library", icon: "▣" },
       { href: "/favorites", label: "Favorites", icon: "♥" },
+      { href: "/providers", label: "Providers", icon: "🔗" },
     ],
   },
   {
     label: "System",
     items: [
+      { href: "/performance", label: "Performance", icon: "📊" },
       { href: "/settings", label: "Settings", icon: "⚙" },
     ],
   },
