@@ -298,45 +298,27 @@ export function runtimeUninstallGame(id: string) {
 }
 
 export function runtimeStopGame(id: string) {
-  fetch(api("/api/games/stop"), {
-    method: "POST",
-    headers: { "content-type": "application/json", ...authHeader() },
-    body: JSON.stringify({ id }),
-  }).then(() => {
-    state = { ...state, runningGames: state.runningGames.filter((g) => g !== id) };
-    emit();
-  });
+  // Send stop command via WebSocket to the agent
+  runtimeSend("stop_app", { id });
+  state = { ...state, runningGames: state.runningGames.filter((g) => g !== id) };
+  emit();
 }
 
 export async function runtimeFetchApps(): Promise<AppEntry[]> {
-  try {
-    const res = await fetch(api("/api/apps"), { headers: { ...authHeader() } });
-    const data = await res.json();
-    const list: AppEntry[] = data?.data || [];
-    const apps: Record<string, AppEntry> = {};
-    for (const a of list) apps[a.id] = a;
-    state = { ...state, apps };
-    emit();
-    return list;
-  } catch {
-    return [];
-  }
+  // Apps are pushed by the agent via WebSocket "apps" event
+  // Return current state
+  const apps = Object.values(state.apps);
+  return apps;
 }
 
 export function runtimeLaunchApp(id: string) {
-  fetch(api("/api/apps/launch"), {
-    method: "POST",
-    headers: { "content-type": "application/json", ...authHeader() },
-    body: JSON.stringify({ id }),
-  });
+  // Send launch command via WebSocket to the agent
+  runtimeSend("launch_app", { id });
 }
 
 export function runtimeStopApp(id: string) {
-  fetch(api("/api/apps/stop"), {
-    method: "POST",
-    headers: { "content-type": "application/json", ...authHeader() },
-    body: JSON.stringify({ id }),
-  });
+  // Send stop command via WebSocket to the agent
+  runtimeSend("stop_app", { id });
 }
 
 export function runtimeSend(type: string, payload: unknown) {

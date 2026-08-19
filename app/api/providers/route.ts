@@ -1,5 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getManager } from "@/lib/runtime/manager.mjs";
+import { NextResponse } from "next/server";
 
 const PROVIDER_STATE: Record<string, { loggedIn: boolean; username?: string; gameCount?: number; games?: any[] }> = {};
 

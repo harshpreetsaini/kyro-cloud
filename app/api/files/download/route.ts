@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, stat } from "@/lib/files/fs.mjs";
+import { readFile } from "@/lib/files/fs.mjs";
 import path from "path";
 
 export async function GET(req: NextRequest) {

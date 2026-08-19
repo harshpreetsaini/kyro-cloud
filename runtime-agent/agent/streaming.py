@@ -13,10 +13,13 @@ STREAM_PROC = None
 XVFB_PROC = None
 VNC_TUNNEL = None
 _GSTREAMER_proc = None
+_selkies_proc = None
 _gstreamer_fps = 0
 _gstreamer_frame_count = 0
 _gstreamer_last_fps_time = 0
-_current_quality = None  # tracks active quality preset for adaptive streaming
+_current_quality = None
+BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent")
+RUNTIME_AUTH_SECRET = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
 
 # Quality presets: maps (resolution, quality) -> (width, height, bitrate_kbps, key_int_fps_mult)
 QUALITY_PRESETS = {
@@ -130,35 +133,38 @@ def start_desktop(display: str = DISPLAY) -> bool:
 
 
 def start_stream(payload: dict) -> dict:
-    """Start the Selkies WebRTC streaming pipeline.
+    """Start the best available streaming pipeline.
 
-    Requires the selkies-gstreamer webrtc stack to be installed by the bootstrap.
+    Priority: selkies-gstreamer (WebRTC, lowest latency) > custom GStreamer > VNC.
     Returns a signaling descriptor for the frontend client.
     """
-    global STREAM_PROC
-    resolution = payload.get("resolution", "1080p")
-    fps = payload.get("fps", 60)
-    env = dict(os.environ, DISPLAY=DISPLAY)
-    try:
-        STREAM_PROC = subprocess.Popen(
-            [
-                "selkies-gstreamer",
-                "--resolution",
-                {"720p": "1280x720", "900p": "1600x900", "1080p": "1920x1080", "Auto": "1920x1080"}.get(
-                    resolution, "1920x1080"
-                ),
-                "--fps",
-                str(fps),
-                "--webrtc",
-            ],
-            env=env,
-        )
-        return {
-            "signalingUrl": os.environ.get("LUNA_SIGNALING_URL"),
-            "iceServers": [{"urls": "stun:stun.l.google.com:19302"}],
-        }
-    except FileNotFoundError:
-        return {"error": "selkies-gstreamer not installed"}
+    global _selkies_proc, STREAM_PROC
+
+    # Try selkies-gstreamer first (best latency, hardware WebRTC)
+    if shutil.which("selkies-gstreamer"):
+        try:
+            resolution = payload.get("resolution", "1080p")
+            fps = payload.get("fps", 60)
+            res_map = {"720p": "1280x720", "900p": "1600x900", "1080p": "1920x1080", "Auto": "1920x1080"}
+            env = dict(os.environ, DISPLAY=DISPLAY)
+            _selkies_proc = subprocess.Popen(
+                ["selkies-gstreamer",
+                 "--resolution", res_map.get(resolution, "1920x1080"),
+                 "--fps", str(fps),
+                 "--encoder", "nvh264enc" if shutil.which("nvh264enc") else "x264enc",
+                 "--enable-audio"],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            STREAM_PROC = _selkies_proc
+            time.sleep(2)
+            if _selkies_proc.poll() is None:
+                print("[stream] selkies-gstreamer started (lowest latency)")
+                return {"ok": True, "mode": "selkies", "resolution": resolution, "fps": fps}
+        except Exception as e:
+            print(f"[stream] selkies-gstreamer failed: {e}")
+
+    # Fall back to custom GStreamer pipeline
+    return {"ok": True, "mode": "gstreamer", "resolution": payload.get("resolution", "1080p")}
 
 
 def launch_game(payload: dict) -> None:
@@ -224,8 +230,8 @@ def start_vnc(payload=None) -> dict:
             return {"ok": False, "error": "x11vnc did not open port 5901"}
 
         # Open the outbound tunnel to the backend /vnc endpoint.
-        backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
-        token = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+        backend = BACKEND_WS.replace("/agent", "/vnc")
+        token = RUNTIME_AUTH_SECRET
         ws_url = "%s?token=%s" % (backend, token)
         try:
             VNC_TUNNEL = websocket.create_connection(ws_url, timeout=15)
@@ -445,23 +451,23 @@ def start_gstreamer(payload=None) -> dict:
                         "width": width, "height": height, "bitrate": bitrate,
                         "encoder": encoder}
 
-    # Build the GStreamer pipeline.
+    # Build the GStreamer pipeline with ultra-low-latency settings.
     # Output: raw H.264 Annex-B byte stream to stdout (fdsink).
-    enc_props = (
-        f"bitrate={bitrate} tune=zerolatency max-latency=0"
-        if "nv" in encoder
-        else f"bitrate={bitrate // 1000} speed-preset=ultrafast tune=zerolatency"
-    )
+    if "nv" in encoder:
+        enc_props = f"bitrate={bitrate} tune=zerolatency max-latency=0 preset=1 rc-mode=cbr"
+    else:
+        enc_props = f"bitrate={bitrate // 1000} speed-preset=ultrafast tune=zerolatency bframes=0 ref=1"
     key_int = max(int(fps * key_int_mult), 1)
     pipeline = (
         f"gst-launch-1.0 -e "
-        f"{capture} display-name={DISPLAY} use-damage=false "
+        f"{capture} display-name={DISPLAY} use-damage=false show-pointer=true "
         f"! video/x-raw,framerate={fps}/1 "
-        f"! videoconvert "
+        f"! videoconvert n-threads=2 "
         f"! video/x-raw,format=I420,width={width},height={height} "
-        f"! {encoder} {enc_props} key-int-max={key_int} "
+        f"! {encoder} {enc_props} key-int-max={key_int} threads=2 "
         f"! video/x-h264,stream-format=byte-stream,profile=baseline "
-        f"! h264parse "
+        f"! h264parse config-interval=1 "
+        f"! identity sync=false "
         f"! fdsink sync=false"
     )
 
@@ -569,17 +575,18 @@ def start_gstreamer(payload=None) -> dict:
 
 
 def stop_all() -> None:
-    global VNC_TUNNEL, _GSTREAMER_proc
+    global VNC_TUNNEL, _GSTREAMER_proc, _selkies_proc
     if VNC_TUNNEL:
         try:
             VNC_TUNNEL.close()
         except Exception:
             pass
         VNC_TUNNEL = None
-    for p in (STREAM_PROC, DESKTOP_PROC, XVFB_PROC, _GSTREAMER_proc):
+    for p in (STREAM_PROC, DESKTOP_PROC, XVFB_PROC, _GSTREAMER_proc, _selkies_proc):
         try:
             if p:
                 p.terminate()
         except Exception:
             pass
     _GSTREAMER_proc = None
+    _selkies_proc = None

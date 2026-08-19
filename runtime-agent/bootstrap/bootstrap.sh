@@ -111,19 +111,38 @@ install_steam() {
 }
 install_steam
 
-echo "[bootstrap] installing GStreamer + GPU encoding (NVENC) + X11 capture..."
+echo "[bootstrap] installing GStreamer + GPU encoding (NVENC) + X11 capture + selkies-gstreamer..."
 apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libx11-dev xauth \
   mesa-vulkan-drivers vulkan-tools libvulkan1 libegl1 mesa-utils xdg-utils \
-  pulseaudio-utils pulseaudio
+  pulseaudio-utils pulseaudio libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-nice gstreamer1.0-signaling gstreamer1.0-plugins-bad-apps \
+  libssl-dev libcrypto++-dev libnice-dev libsrtp2-dev libwebsocketpp-dev
 
 # Try to install the NVENC GStreamer plugin (hardware GPU encoding).
-# On Colab (Ubuntu 22.04) this is often gstreamer1.0-nvenc or available via
-# the NVIDIA driver package.  If not available, GStreamer will fall back to
-# x264enc (software) which still beats x11vnc's RFB protocol.
 apt_install gstreamer1.0-nvenc 2>/dev/null \
   || apt_install libgstreamer-plugins-bad1.0-dev 2>/dev/null \
   || echo "[bootstrap] NVENC GStreamer plugin not in apt (will use software fallback or existing driver)"
+
+# Install selkies-gstreamer for optimal low-latency WebRTC streaming
+install_selkies() {
+  if command -v selkies-gst-webrtc-signalling-server >/dev/null 2>&1; then
+    echo "[ok] selkies-gstreamer present"; return
+  fi
+  echo "[bootstrap] installing selkies-gstreamer..."
+  # Install from pip (fastest method)
+  pip3 install selkies-gstreamer 2>/dev/null || true
+  # Also install the signalling server
+  pip3 install selkies-gstreamer-signalling 2>/dev/null || true
+  # Try apt as fallback
+  apt_install selkies-gstreamer 2>/dev/null || true
+  if pip3 show selkies-gstreamer >/dev/null 2>&1; then
+    echo "[ok] selkies-gstreamer installed via pip"
+  else
+    echo "[warn] selkies-gstreamer not available — will use custom GStreamer pipeline"
+  fi
+}
+install_selkies
 
 # Ensure PulseAudio is running for audio capture.
 pulseaudio --start --exit-idle-time=-1 2>/dev/null || true

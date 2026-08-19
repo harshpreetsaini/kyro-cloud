@@ -11,7 +11,7 @@ import apps
 import webrtc_stream
 
 BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
-TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "")
 RECONNECT = int(os.environ.get("LUNA_RECONNECT", "5"))
 _running = True
 _session_active = False

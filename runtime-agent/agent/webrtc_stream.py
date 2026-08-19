@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import threading
 import websocket
 
@@ -16,7 +17,7 @@ except Exception as _e:  # pragma: no cover - optional dependency
     _AIORTC_ERROR = _e
 
 DISPLAY = os.environ.get("LUNA_DISPLAY", ":1")
-_backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent")
+_backend = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 
 
 class DisplayVideoTrack(VideoStreamTrack):
