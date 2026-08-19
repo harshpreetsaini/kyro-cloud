@@ -4,11 +4,12 @@ import { useState, useEffect } from "react";
 import { Button, Card, Badge, StatusDot } from "@/components/ui";
 import { RESOLUTION_OPTIONS, FPS_OPTIONS, QUALITY_OPTIONS } from "@shared/constants";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
+import { adjustQuality } from "@/lib/runtime/store";
 
 const KEY = "luna.settings";
 
 export default function SettingsPage() {
-  const { session, systemInfo, connected } = useRuntime();
+  const { session, systemInfo, connected, stream } = useRuntime();
   const [settings, setSettings] = useState({
     resolution: "1080p",
     fps: 60,
@@ -19,6 +20,8 @@ export default function SettingsPage() {
     animations: true,
     autoStart: false,
     mouseSensitivity: 1,
+    volume: 80,
+    muteAudio: false,
   });
 
   useEffect(() => {
@@ -28,6 +31,14 @@ export default function SettingsPage() {
 
   function save() {
     localStorage.setItem(KEY, JSON.stringify(settings));
+    // Apply streaming settings to active stream
+    if (stream) {
+      adjustQuality({
+        resolution: settings.resolution,
+        fps: typeof settings.fps === "number" ? settings.fps : 60,
+        quality: settings.quality,
+      });
+    }
   }
 
   function update<K extends keyof typeof settings>(k: K, v: (typeof settings)[K]) {
@@ -48,6 +59,11 @@ export default function SettingsPage() {
           options={[...FPS_OPTIONS].map(String)}
         />
         <Select label="Quality" value={settings.quality} onChange={(v) => update("quality", v as any)} options={[...QUALITY_OPTIONS]} />
+        {stream && (
+          <p className="text-[11px] text-muted">
+            Changes apply to the active stream immediately.
+          </p>
+        )}
       </Card>
 
       <Card className="flex flex-col gap-4">
@@ -57,7 +73,7 @@ export default function SettingsPage() {
       </Card>
 
       <Card className="flex flex-col gap-4">
-        <h3 className="text-sm text-muted uppercase tracking-wider">Input</h3>
+        <h3 className="text-sm text-muted uppercase tracking-wider">Input & Audio</h3>
         <label className="flex items-center justify-between text-sm">
           <span>Mouse sensitivity</span>
           <input
@@ -70,6 +86,19 @@ export default function SettingsPage() {
             className="accent-[var(--color-accent)]"
           />
         </label>
+        <label className="flex items-center justify-between text-sm">
+          <span>Volume</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={settings.volume}
+            onChange={(e) => update("volume", Number(e.target.value))}
+            className="accent-[var(--color-accent)]"
+          />
+        </label>
+        <Toggle label="Mute audio" checked={settings.muteAudio} onChange={(v) => update("muteAudio", v)} />
       </Card>
 
       <Card className="flex flex-col gap-4">

@@ -20,13 +20,29 @@ export function GStreamerViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
+  const [latency, setLatency] = useState(0);
   const [audioSupported, setAudioSupported] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioGainRef = useRef<GainNode | null>(null);
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
   const frameCountRef = useRef(0);
   const lastFpsTimeRef = useRef(Date.now());
+  const latencySumRef = useRef(0);
+  const latencyCountRef = useRef(0);
+
+  // Load audio settings from localStorage
+  const getAudioSettings = () => {
+    try {
+      const saved = localStorage.getItem("luna.settings");
+      if (saved) {
+        const s = JSON.parse(saved);
+        return { volume: s.volume ?? 80, mute: s.muteAudio ?? false };
+      }
+    } catch {}
+    return { volume: 80, mute: false };
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -46,6 +62,12 @@ export function GStreamerViewer({
         setFps(Math.round(frameCountRef.current / elapsed));
         frameCountRef.current = 0;
         lastFpsTimeRef.current = now;
+        // Update average latency
+        if (latencyCountRef.current > 0) {
+          setLatency(Math.round(latencySumRef.current / latencyCountRef.current));
+          latencySumRef.current = 0;
+          latencyCountRef.current = 0;
+        }
       }
     }, 1000);
 
@@ -83,9 +105,15 @@ export function GStreamerViewer({
 
       // Set up audio context for Opus decoding.
       let audioCtx: AudioContext | null = null;
+      let gainNode: GainNode | null = null;
       try {
         audioCtx = new AudioContext();
+        gainNode = audioCtx.createGain();
+        const { volume, mute } = getAudioSettings();
+        gainNode.gain.value = mute ? 0 : volume / 100;
+        gainNode.connect(audioCtx.destination);
         audioCtxRef.current = audioCtx;
+        audioGainRef.current = gainNode;
         setAudioSupported(true);
       } catch {}
 
@@ -99,10 +127,28 @@ export function GStreamerViewer({
 
         const rawData = new Uint8Array(ev.data);
         const marker = rawData[0];
-        const payload = rawData.slice(1);
 
         if (marker === 0x00) {
-          // Video frame (H.264)
+          // Video frame (H.264) with 4-byte timestamp prefix
+          // Extract timestamp from bytes 1-4
+          const timestampBytes = rawData.slice(1, 5);
+          const serverTimestamp = (timestampBytes[0] << 24) |
+                                  (timestampBytes[1] << 16) |
+                                  (timestampBytes[2] << 8) |
+                                  timestampBytes[3];
+
+          // Calculate latency (server timestamp vs local time)
+          const now = Date.now() % 0xFFFFFFFF;
+          let latMs = now - serverTimestamp;
+          if (latMs < 0) latMs += 0xFFFFFFFF; // Handle wraparound
+          if (latMs < 1000) { // Sanity check: ignore if > 1 second
+            latencySumRef.current += latMs;
+            latencyCountRef.current++;
+          }
+
+          // Actual video data starts at byte 5
+          const payload = rawData.slice(5);
+
           if (!lastConfig) {
             lastConfig = true;
             try {
@@ -127,10 +173,16 @@ export function GStreamerViewer({
           }
         } else if (marker === 0x01 && audioCtx) {
           // Audio frame (Opus in Ogg container)
+          const payload = rawData.slice(1);
           audioCtx.decodeAudioData(payload.buffer).then((buf) => {
             const source = audioCtx!.createBufferSource();
             source.buffer = buf;
-            source.connect(audioCtx!.destination);
+            // Connect through gain node for volume control
+            if (audioGainRef.current) {
+              source.connect(audioGainRef.current);
+            } else {
+              source.connect(audioCtx!.destination);
+            }
             source.start();
           }).catch(() => {});
         }
@@ -178,7 +230,8 @@ export function GStreamerViewer({
         const rawData = new Uint8Array(ev.data);
         const marker = rawData[0];
         if (marker !== 0x00) return; // Skip audio packets
-        const payload = rawData.slice(1);
+        // Skip 4-byte timestamp for MSE mode
+        const payload = rawData.slice(5);
         try {
           sourceBuffer.appendBuffer(payload);
         } catch {
@@ -206,6 +259,7 @@ export function GStreamerViewer({
       cancelled = true;
       clearInterval(fpsInterval);
       try { decoderRef.current?.close(); } catch {}
+      try { audioGainRef.current?.disconnect(); } catch {}
       try { audioCtxRef.current?.close(); } catch {}
       try { wsRef.current?.close(); } catch {}
     };
@@ -223,7 +277,7 @@ export function GStreamerViewer({
     <div className={`relative w-full h-full ${className}`}>
       <canvas ref={canvasRef} className="w-full h-full object-contain bg-black" />
       <div className="absolute top-2 right-2 text-xs bg-black/60 text-green-400 px-2 py-1 rounded font-mono">
-        {fps} FPS | GPU H.264{audioSupported ? " + Opus" : ""}
+        {fps} FPS | {latency}ms | GPU H.264{audioSupported ? " + Opus" : ""}
       </div>
     </div>
   );

@@ -305,6 +305,37 @@ async function handleApi(req, res, url) {
     });
     return res.end(Buffer.from(data));
   }
+  // -----------------------------------------------------------------------
+  // Clipboard operations — proxied to Colab agent
+  // -----------------------------------------------------------------------
+  async function clipboardAgent(rid, type, payload) {
+    if (!m.agentAttached) return null;
+    m.sendToAgent({ type, payload: { ...payload, requestId: rid } });
+    try {
+      return await m.waitForAgentResult(rid, 10000);
+    } catch {
+      return null;
+    }
+  }
+
+  if (p === "/api/clipboard" && method === "GET") {
+    const rid = "cg-" + uid();
+    const result = await clipboardAgent(rid, "clipboard.get", {});
+    if (result) {
+      return sendJson(req, res, 200, { ok: result.ok, data: { text: result.text || "" }, error: result.error });
+    }
+    return sendJson(req, res, 503, { ok: false, error: "Agent not connected" });
+  }
+  if (p === "/api/clipboard" && method === "POST") {
+    const body = await readJson(req);
+    const text = typeof body.text === "string" ? body.text : "";
+    const rid = "cs-" + uid();
+    const result = await clipboardAgent(rid, "clipboard.set", { text });
+    if (result) {
+      return sendJson(req, res, 200, { ok: result.ok, error: result.error });
+    }
+    return sendJson(req, res, 503, { ok: false, error: "Agent not connected" });
+  }
   if (p === "/api/stream/session" && method === "GET") {
     if (!m.stream) return sendJson(req, res, 409, { ok: false, error: "No active stream" });
     return sendJson(req, res, 200, { ok: true, data: m.stream });

@@ -125,6 +125,18 @@ def on_message(ws, raw):
         except Exception as ex:
             result = {"ok": False, "error": f"start_gstreamer crashed: {ex}"}
         send(ws, "gst_ready", result)
+    elif t == "adjust_quality":
+        try:
+            result = streaming.adjust_quality(p)
+        except Exception as ex:
+            result = {"ok": False, "error": f"adjust_quality crashed: {ex}"}
+        send(ws, "quality_adjusted", result)
+    elif t == "get_quality":
+        try:
+            result = streaming.get_current_quality()
+        except Exception as ex:
+            result = {"ok": False, "error": f"get_quality crashed: {ex}"}
+        send(ws, "quality_info", result)
     elif t == "launch_game":
         streaming.launch_game(p)
         send(ws, "game.started", p)
@@ -161,6 +173,10 @@ def on_message(ws, raw):
         _files_rename(p)
     elif t == "files.delete":
         _files_delete(p)
+    elif t == "clipboard.get":
+        _clipboard_get(p)
+    elif t == "clipboard.set":
+        _clipboard_set(p)
     elif t == "stop":
         _session_active = False
         streaming.stop_all()
@@ -360,6 +376,70 @@ def _files_delete(p):
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
+
+
+def _clipboard_get(p):
+    """Get clipboard content from X11 display on Colab."""
+    import subprocess
+    rid = p.get("requestId", "")
+    try:
+        display = os.environ.get("DISPLAY", ":1")
+        # Try xclip first
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o"],
+            capture_output=True, text=True, timeout=5,
+            env={**os.environ, "DISPLAY": display},
+        )
+        if result.returncode == 0:
+            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": result.stdout})
+        else:
+            # xclip might fail if no selection; return empty
+            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": ""})
+    except FileNotFoundError:
+        # xclip not installed, try xsel
+        try:
+            result = subprocess.run(
+                ["xsel", "--clipboard", "--output"],
+                capture_output=True, text=True, timeout=5,
+                env={**os.environ, "DISPLAY": display},
+            )
+            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": result.stdout})
+        except Exception as e:
+            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+    except Exception as e:
+        agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+
+
+def _clipboard_set(p):
+    """Set clipboard content on X11 display on Colab."""
+    import subprocess
+    rid = p.get("requestId", "")
+    text = p.get("text", "")
+    try:
+        display = os.environ.get("DISPLAY", ":1")
+        # Try xclip first
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text, capture_output=True, text=True, timeout=5,
+            env={**os.environ, "DISPLAY": display},
+        )
+        if result.returncode == 0:
+            agent_send("clipboard.result", {"requestId": rid, "ok": True})
+        else:
+            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": result.stderr})
+    except FileNotFoundError:
+        # xclip not installed, try xsel
+        try:
+            result = subprocess.run(
+                ["xsel", "--clipboard", "--input"],
+                input=text, capture_output=True, text=True, timeout=5,
+                env={**os.environ, "DISPLAY": display},
+            )
+            agent_send("clipboard.result", {"requestId": rid, "ok": True})
+        except Exception as e:
+            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+    except Exception as e:
+        agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
 
 
 def on_error(ws, err):

@@ -40,7 +40,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm flex flex-col gap-6 animate-fade-in">
         <div className="flex flex-col items-center gap-2">
           <div className="w-14 h-14 rounded-2xl bg-accent glow-accent flex items-center justify-center text-2xl font-display font-bold">
-            L
+            K
           </div>
           <h1 className="font-display text-2xl tracking-tight">{APP_NAME}</h1>
           <p className="text-sm text-muted">{APP_TAGLINE}</p>

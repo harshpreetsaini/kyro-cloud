@@ -57,7 +57,7 @@ apt_install xfce4 xfce4-goodies xvfb tigervnc-standalone-server dbus-x11 x11vnc 
 apt_install openbox
 
 echo "[bootstrap] installing utility applications (terminal, file manager, settings)..."
-apt_install xterm xfce4-terminal pcmanfm thunar xfce4-settings xfce4-settings-manager xdotool wget curl ca-certificates libfuse2
+apt_install xterm xfce4-terminal pcmanfm thunar xfce4-settings xfce4-settings-manager xdotool wget curl ca-certificates libfuse2 xclip xsel
 
 # Firefox: apt is a snap transitional package on 22.04, so fall back to the
 # official Mozilla tarball which always provides a real `firefox` binary.
@@ -168,7 +168,7 @@ except Exception as e:
 PY
 
 echo "[bootstrap] verifying installed components:"
-for b in Xvfb x11vnc openbox xfce4-session xterm firefox steam lutris heroic feh gst-launch-1.0; do
+for b in Xvfb x11vnc openbox xfce4-session xterm firefox steam lutris heroic feh gst-launch-1.0 xclip; do
   if command -v "$b" >/dev/null 2>&1; then
     echo "  [OK]   $b -> $(command -v $b)"
   else

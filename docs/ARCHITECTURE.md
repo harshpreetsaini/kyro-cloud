@@ -1,6 +1,6 @@
 # Architecture
 
-LUNA CLOUD is a single-user personal cloud gaming platform. The web app and backend are a
+KYRO CLOUD is a single-user personal cloud gaming platform. The web app and backend are a
 **Next.js monolith**; a separate **Python runtime-agent** runs inside the compute environment
 (Google Colab first) and connects **outward** to the backend.
 

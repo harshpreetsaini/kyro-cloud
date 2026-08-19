@@ -1,8 +1,8 @@
-# LUNA CLOUD
+# KYRO CLOUD
 
-> **Your PC. Anywhere.** — a private, single-user personal cloud gaming platform.
+> **Your PC. Anywhere.** — a personal cloud gaming platform.
 
-LUNA CLOUD turns a GPU runtime (Google Colab first) into a temporary personal gaming
+KYRO CLOUD turns a GPU runtime (Google Colab first) into a temporary personal gaming
 computer you control through a modern web interface. It streams a real Linux desktop with
 mouse, keyboard, and audio, and lets you install launchers, games, mods, and manage files
 just like a normal PC.

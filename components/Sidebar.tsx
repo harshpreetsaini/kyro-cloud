@@ -8,29 +8,19 @@ import { sidebarStore } from "@/lib/ui/sidebar";
 
 const GROUPS = [
   {
-    label: "Home",
-    items: [{ href: "/dashboard", label: "Dashboard", icon: "◧" }],
-  },
-  {
-    label: "Cloud PC",
+    label: "Browse",
     items: [
-      { href: "/desktop", label: "Desktop", icon: "▣" },
-      { href: "/games", label: "Games", icon: "▶" },
-      { href: "/applications", label: "Applications", icon: "▤" },
-      { href: "/files", label: "Files", icon: "🗀" },
-    ],
-  },
-  {
-    label: "Tools",
-    items: [
-      { href: "/terminal", label: "Terminal", icon: "›_" },
-      { href: "/performance", label: "Performance", icon: "◔" },
-      { href: "/diagnostics", label: "Diagnostics", icon: "✚" },
+      { href: "/home", label: "Home", icon: "◈" },
+      { href: "/games", label: "All Games", icon: "▶" },
+      { href: "/library", label: "Library", icon: "◧" },
+      { href: "/favorites", label: "Favorites", icon: "♡" },
     ],
   },
   {
     label: "System",
-    items: [{ href: "/settings", label: "Settings", icon: "⚙" }],
+    items: [
+      { href: "/settings", label: "Settings", icon: "⚙" },
+    ],
   },
 ];
 
@@ -57,7 +47,7 @@ export function Sidebar() {
         }`}
       >
         <div className="h-16 flex items-center gap-2 px-5 border-b border-white/5 shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-accent glow-accent flex items-center justify-center font-bold">L</div>
+          <div className="w-8 h-8 rounded-lg bg-accent glow-accent flex items-center justify-center font-bold text-sm">K</div>
           <span className="font-semibold tracking-tight">{APP_NAME}</span>
         </div>
         <nav className="flex-1 py-4 flex flex-col gap-5 overflow-y-auto px-3">

@@ -77,18 +77,60 @@ export interface StreamClientConfig {
 
 export type Compatibility = "SUPPORTED" | "PARTIAL" | "UNKNOWN" | "UNSUPPORTED";
 
+export type GameAvailability = "available" | "install_required" | "installing" | "ready" | "running" | "unavailable" | "unsupported";
+
+export type GameProviderType = "steam" | "epic" | "manual" | "other";
+
+export interface GameProvider {
+  id: string;
+  type: GameProviderType;
+  name: string;
+  appId?: string;
+  launchMethod?: string;
+  availability: GameAvailability;
+}
+
+export interface GameGenre {
+  id: number;
+  name: string;
+}
+
+export interface GameScreenshot {
+  id: number;
+  url: string;
+  width?: number;
+  height?: number;
+}
+
 export interface GameEntry {
   id: string;
+  slug: string;
   name: string;
-  executable: string;
+  description?: string;
+  shortDescription?: string;
+  heroImage?: string;
+  coverImage?: string;
+  screenshots?: GameScreenshot[];
+  releaseDate?: string;
+  developer?: string;
+  publisher?: string;
+  genres?: GameGenre[];
+  rating?: number;
+  platforms?: string[];
+  providers: GameProvider[];
+  availability: GameAvailability;
+  installed: boolean;
+  favorite?: boolean;
+  lastPlayedAt?: string | null;
+  playTime?: number;
+  running?: boolean;
+  installState?: "idle" | "installing" | "updating";
+  // Legacy fields for backward compatibility
+  executable?: string;
   arguments?: string;
   workingDir?: string;
   launcher?: string;
   compatibility: Compatibility;
-  installed: boolean;
-  lastPlayed?: string | null;
-  running?: boolean;
-  installState?: "idle" | "installing" | "updating";
 }
 
 export interface FileItem {

@@ -172,6 +172,21 @@ function connect() {
         emit();
         break;
       }
+      case "quality_adjusted": {
+        const qualityPayload = event.payload as any;
+        if (qualityPayload?.ok) {
+          notify("Stream quality adjusted", "success");
+        } else {
+          notify(`Quality adjustment failed: ${qualityPayload?.error || "unknown"}`, "error");
+        }
+        emit();
+        break;
+      }
+      case "quality_info": {
+        // Current quality info received
+        emit();
+        break;
+      }
       default:
         break;
     }
@@ -241,6 +256,19 @@ export function runtimeSend(type: string, payload: unknown) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, payload, ts: Date.now() }));
   }
+}
+
+export function adjustQuality(settings: {
+  resolution?: string;
+  fps?: number;
+  quality?: string;
+  network_quality?: string;
+}) {
+  runtimeSend("adjust_quality", settings);
+}
+
+export function getQuality() {
+  runtimeSend("get_quality", {});
 }
 
 export const runtimeStore = {

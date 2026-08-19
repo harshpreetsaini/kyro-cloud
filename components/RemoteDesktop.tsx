@@ -5,6 +5,7 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { wsUrl } from "@/lib/config/api";
 import { WebRTCViewer } from "./WebRTCViewer";
 import { GStreamerViewer } from "./GStreamerViewer";
+import { ClipboardToolbar } from "./ClipboardToolbar";
 
 export function RemoteDesktop({ className = "" }: { className?: string }) {
   const { stream } = useRuntime();
@@ -62,23 +63,40 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
 
   if (stream.type === "gstreamer") {
     return (
-      <GStreamerViewer
-        streamUrl={stream.url || "/ws/stream"}
-        className={className}
-      />
+      <div className={`flex flex-col ${className}`}>
+        <GStreamerViewer
+          streamUrl={stream.url || "/ws/stream"}
+          className="flex-1 min-h-0"
+        />
+        <div className="flex items-center gap-2 px-2 py-1 bg-bg/80 border-t border-white/5">
+          <ClipboardToolbar />
+        </div>
+      </div>
     );
   }
 
   if (stream.type === "webrtc") {
     return (
-      <WebRTCViewer
-        signalingUrl={stream.signalingUrl || "/ws/signal"}
-        room={stream.room || "default"}
-        iceServers={stream.iceServers}
-        className={className}
-      />
+      <div className={`flex flex-col ${className}`}>
+        <WebRTCViewer
+          signalingUrl={stream.signalingUrl || "/ws/signal"}
+          room={stream.room || "default"}
+          iceServers={stream.iceServers}
+          className="flex-1 min-h-0"
+        />
+        <div className="flex items-center gap-2 px-2 py-1 bg-bg/80 border-t border-white/5">
+          <ClipboardToolbar />
+        </div>
+      </div>
     );
   }
 
-  return <div ref={containerRef} className={`w-full h-full bg-black ${className}`} />;
+  return (
+    <div className={`flex flex-col ${className}`}>
+      <div ref={containerRef} className="flex-1 min-h-0 w-full bg-black" />
+      <div className="flex items-center gap-2 px-2 py-1 bg-bg/80 border-t border-white/5">
+        <ClipboardToolbar />
+      </div>
+    </div>
+  );
 }

@@ -14,6 +14,6 @@ app.prepare().then(() => {
   });
   setupWebSocket(server);
   server.listen(port, () => {
-    console.log(`LUNA CLOUD ready on http://localhost:${port}`);
+    console.log(`KYRO CLOUD ready on http://localhost:${port}`);
   });
 });

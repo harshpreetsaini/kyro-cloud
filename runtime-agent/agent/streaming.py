@@ -16,6 +16,37 @@ _GSTREAMER_proc = None
 _gstreamer_fps = 0
 _gstreamer_frame_count = 0
 _gstreamer_last_fps_time = 0
+_current_quality = None  # tracks active quality preset for adaptive streaming
+
+# Quality presets: maps (resolution, quality) -> (width, height, bitrate_kbps, key_int_fps_mult)
+QUALITY_PRESETS = {
+    # (resolution_label, quality_label) -> (width, height, bitrate_kbps, key_int_multiplier)
+    # Low latency / low quality
+    ("720p", "low"):       (1280, 720,  2000, 0.5),
+    ("720p", "balanced"):  (1280, 720,  3500, 0.5),
+    ("720p", "high"):      (1280, 720,  5000, 1),
+    # Medium
+    ("900p", "low"):       (1600, 900,  3500, 0.5),
+    ("900p", "balanced"):  (1600, 900,  5000, 1),
+    ("900p", "high"):      (1600, 900,  7000, 1),
+    # High
+    ("1080p", "low"):      (1920, 1080, 5000, 1),
+    ("1080p", "balanced"): (1920, 1080, 8000, 1),
+    ("1080p", "high"):     (1920, 1080, 12000, 2),
+    # Auto defaults to 1080p balanced
+    ("Auto", "low"):       (1920, 1080, 5000, 1),
+    ("Auto", "balanced"):  (1920, 1080, 8000, 1),
+    ("Auto", "high"):      (1920, 1080, 12000, 2),
+}
+
+# Network-adaptive bitrate tiers (kbps) based on network quality
+ADAPTIVE_BITRATE = {
+    "excellent": {"720p": 5000, "900p": 7000, "1080p": 12000, "Auto": 12000},
+    "good":      {"720p": 3500, "900p": 5000, "1080p": 8000,  "Auto": 8000},
+    "fair":      {"720p": 2000, "900p": 3500, "1080p": 5000,  "Auto": 5000},
+    "poor":      {"720p": 1500, "900p": 2000, "1080p": 3500,  "Auto": 3500},
+    "unknown":   {"720p": 3500, "900p": 5000, "1080p": 8000,  "Auto": 8000},
+}
 
 
 def _display_up(display: str) -> bool:
@@ -300,6 +331,88 @@ def _start_audio_capture(ws_tunnel):
     threading.Thread(target=_audio_thread, daemon=True).start()
 
 
+def _resolve_quality_preset(resolution, quality, fps):
+    """Resolve quality preset to (width, height, bitrate_kbps, key_int_multiplier)."""
+    key = (resolution, quality)
+    if key in QUALITY_PRESETS:
+        w, h, br, kim = QUALITY_PRESETS[key]
+    else:
+        # Fallback to Auto balanced
+        w, h, br, kim = QUALITY_PRESETS[("Auto", "balanced")]
+    return w, h, br, kim
+
+
+def adjust_quality(payload: dict) -> dict:
+    """Adjust streaming quality at runtime by restarting the GStreamer pipeline.
+
+    Supported payload keys:
+      - resolution: "720p" | "900p" | "1080p" | "Auto"
+      - quality: "low" | "balanced" | "high"
+      - fps: 30 | 60
+      - network_quality: "excellent" | "good" | "fair" | "poor" | "unknown"
+        (auto-selects bitrate based on network conditions)
+    """
+    global _current_quality
+
+    if not _GSTREAMER_proc or _GSTREAMER_proc.poll() is not None:
+        return {"ok": False, "error": "GStreamer is not running"}
+
+    # Determine target quality
+    resolution = payload.get("resolution", _current_quality.get("resolution", "1080p") if _current_quality else "1080p")
+    quality = payload.get("quality", _current_quality.get("quality", "balanced") if _current_quality else "balanced")
+    fps = payload.get("fps", _current_quality.get("fps", 60) if _current_quality else 60)
+    network_quality = payload.get("network_quality")
+
+    # If network quality is provided, use adaptive bitrate mapping
+    if network_quality and network_quality in ADAPTIVE_BITRATE:
+        bitrate = ADAPTIVE_BITRATE[network_quality].get(resolution, 8000)
+        print(f"[stream] Adaptive quality: network={network_quality}, bitrate={bitrate}kbps")
+    else:
+        _, _, bitrate, _ = _resolve_quality_preset(resolution, quality, fps)
+
+    # Kill current pipeline
+    try:
+        _GSTREAMER_proc.terminate()
+        _GSTREAMER_proc.wait(timeout=3)
+    except Exception:
+        try:
+            _GSTREAMER_proc.kill()
+        except Exception:
+            pass
+
+    # Restart with new quality settings
+    new_payload = {
+        "resolution": resolution,
+        "quality": quality,
+        "fps": fps,
+    }
+    result = start_gstreamer(new_payload)
+
+    # Notify backend of quality change
+    if result.get("ok") and VNC_TUNNEL:
+        try:
+            VNC_TUNNEL.send(json.dumps({
+                "type": "gst-quality-changed",
+                "resolution": resolution,
+                "quality": quality,
+                "fps": fps,
+                "bitrate": result.get("bitrate", bitrate),
+                "width": result.get("width"),
+                "height": result.get("height"),
+            }))
+        except Exception:
+            pass
+
+    return result
+
+
+def get_current_quality() -> dict:
+    """Return the current streaming quality configuration."""
+    if _current_quality:
+        return {"ok": True, **_current_quality}
+    return {"ok": False, "error": "No active stream"}
+
+
 def start_gstreamer(payload=None) -> dict:
     """Start GPU-accelerated streaming via GStreamer.
 
@@ -311,7 +424,7 @@ def start_gstreamer(payload=None) -> dict:
     Falls back to ``start_vnc()`` if GStreamer or a suitable encoder is
     unavailable.
     """
-    global _GSTREAMER_proc, VNC_TUNNEL, STREAM_PROC
+    global _GSTREAMER_proc, VNC_TUNNEL, STREAM_PROC, _current_quality
 
     if not start_desktop():
         return {"ok": False, "error": "desktop environment failed to start"}
@@ -323,19 +436,30 @@ def start_gstreamer(payload=None) -> dict:
 
     payload = payload or {}
     fps = payload.get("fps", 60)
-    width = payload.get("width", 1920)
-    height = payload.get("height", 1080)
+    resolution = payload.get("resolution", "1080p")
+    quality = payload.get("quality", "balanced")
+
+    # Resolve quality preset
+    width, height, bitrate, key_int_mult = _resolve_quality_preset(resolution, quality, fps)
+    _current_quality = {"resolution": resolution, "quality": quality, "fps": fps,
+                        "width": width, "height": height, "bitrate": bitrate,
+                        "encoder": encoder}
 
     # Build the GStreamer pipeline.
     # Output: raw H.264 Annex-B byte stream to stdout (fdsink).
-    enc_props = "bitrate=8000 tune=zerolatency" if "nv" in encoder else "speed-preset=ultrafast tune=zerolatency"
+    enc_props = (
+        f"bitrate={bitrate} tune=zerolatency max-latency=0"
+        if "nv" in encoder
+        else f"bitrate={bitrate // 1000} speed-preset=ultrafast tune=zerolatency"
+    )
+    key_int = max(int(fps * key_int_mult), 1)
     pipeline = (
         f"gst-launch-1.0 -e "
         f"{capture} display-name={DISPLAY} use-damage=false "
         f"! video/x-raw,framerate={fps}/1 "
         f"! videoconvert "
         f"! video/x-raw,format=I420,width={width},height={height} "
-        f"! {encoder} {enc_props} key-int-max={fps * 2} "
+        f"! {encoder} {enc_props} key-int-max={key_int} "
         f"! video/x-h264,stream-format=byte-stream,profile=baseline "
         f"! h264parse "
         f"! fdsink sync=false"
@@ -372,7 +496,11 @@ def start_gstreamer(payload=None) -> dict:
 
     # Signal the backend that this is a raw H.264 stream (not VNC RFB).
     try:
-        VNC_TUNNEL.send(json.dumps({"type": "gst-init", "encoder": encoder, "fps": fps, "width": width, "height": height}))
+        VNC_TUNNEL.send(json.dumps({
+            "type": "gst-init", "encoder": encoder, "fps": fps,
+            "width": width, "height": height, "bitrate": bitrate,
+            "quality": quality, "resolution": resolution,
+        }))
     except Exception:
         pass
 
@@ -435,8 +563,9 @@ def start_gstreamer(payload=None) -> dict:
             start_vnc(payload)
     threading.Thread(target=_gst_watchdog, daemon=True).start()
 
-    print("[stream] GStreamer GPU streaming started (NVENC/x264)")
-    return {"ok": True, "encoder": encoder, "mode": "gstreamer"}
+    print(f"[stream] GStreamer GPU streaming started ({encoder}, {width}x{height}@{fps}fps, {bitrate}kbps)")
+    return {"ok": True, "encoder": encoder, "mode": "gstreamer", "bitrate": bitrate,
+            "width": width, "height": height, "fps": fps}
 
 
 def stop_all() -> None:

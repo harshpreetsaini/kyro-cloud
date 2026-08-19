@@ -6,13 +6,15 @@ export function Button({
   children,
   onClick,
   variant = "primary",
+  size = "md",
   disabled,
   className = "",
   title,
 }: {
   children: ReactNode;
-  onClick?: () => void;
+  onClick?: (e?: React.MouseEvent) => void;
   variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "sm" | "md" | "lg";
   disabled?: boolean;
   className?: string;
   title?: string;
@@ -23,12 +25,17 @@ export function Button({
     ghost: "bg-secondary text-text hover:bg-[#1c2230] border border-white/5",
     danger: "bg-danger/90 text-white hover:bg-danger",
   };
+  const sizes: Record<string, string> = {
+    sm: "px-3 py-1.5 text-xs",
+    md: "px-4 py-2 text-sm",
+    lg: "px-6 py-3 text-base",
+  };
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`px-4 py-2 rounded-lg text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]} ${className}`}
+      className={`rounded-lg font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]} ${sizes[size]} ${className}`}
     >
       {children}
     </button>
