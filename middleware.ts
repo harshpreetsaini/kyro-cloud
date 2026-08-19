@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession, SESSION_COOKIE } from "./lib/auth/jwt";
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/games/screenshots"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/games/screenshots", "/api/providers/steam/callback", "/api/providers/epic/callback", "/api/providers/gog/callback"];
+
+function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_PATHS.includes(pathname)) return true;
+  if (/^\/api\/providers\/[^/]+\/(login|logout)$/.test(pathname)) return true;
+  return false;
+}
 
 function applyCors(res: NextResponse, origin: string | null) {
   const allowed = process.env.FRONTEND_URL || "*";
@@ -32,7 +38,7 @@ export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   applyCors(res, origin);
 
-  if (PUBLIC_PATHS.includes(pathname)) return res;
+  if (isPublicPath(pathname)) return res;
 
   if (pathname.startsWith("/api/")) {
     const session = await verifySession(getRequestToken(req));

@@ -175,8 +175,8 @@ export default function GameDetailsPage() {
         <div className="absolute inset-0 flex flex-col justify-end p-8">
           <div className="max-w-3xl">
             <div className="flex items-center gap-2 mb-3">
-              {game.genres?.slice(0, 3).map((g) => (
-                <span key={g.id} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name}</span>
+              {Array.isArray(game.genres) && game.genres.slice(0, 3).map((g: any, i: number) => (
+                <span key={g.id ?? i} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name || g}</span>
               ))}
               {game.rating && (
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {Number(game.rating).toFixed(1)}</span>
@@ -364,7 +364,7 @@ export default function GameDetailsPage() {
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Game Information</h3>
             <div className="flex flex-col gap-2 text-sm">
-              {game.genres && game.genres.length > 0 && <InfoRow label="Genre" value={game.genres.map((g: { name: string }) => g.name).join(", ")} />}
+              {Array.isArray(game.genres) && game.genres.length > 0 && <InfoRow label="Genre" value={game.genres.map((g: any) => g.name || g).join(", ")} />}
               {game.releaseDate && <InfoRow label="Release" value={new Date(game.releaseDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })} />}
               {game.developer && <InfoRow label="Developer" value={game.developer} />}
               {game.publisher && <InfoRow label="Publisher" value={game.publisher} />}

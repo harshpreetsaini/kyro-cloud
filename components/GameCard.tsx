@@ -128,8 +128,8 @@ export function GameCard({
           <p className="font-medium text-xs leading-tight truncate" title={game.name}>{game.name}</p>
 
           {/* Genres */}
-          {game.genres && game.genres.length > 0 && (
-            <p className="text-[10px] text-muted truncate">{game.genres.slice(0, 2).map((g) => g.name).join(" · ")}</p>
+          {Array.isArray(game.genres) && game.genres.length > 0 && (
+            <p className="text-[10px] text-muted truncate">{game.genres.slice(0, 2).map((g: any) => g.name || g).join(" · ")}</p>
           )}
 
           {/* Meta row: platform + size + metacritic */}

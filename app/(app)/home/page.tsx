@@ -78,8 +78,8 @@ export default function HomePage() {
           <div className="absolute inset-0 flex flex-col justify-end p-8">
             <div className="max-w-2xl">
               <div className="flex items-center gap-2 mb-3">
-                {heroGame.genres?.slice(0, 3).map((g) => (
-                  <span key={g.id} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name}</span>
+                {Array.isArray(heroGame.genres) && heroGame.genres.slice(0, 3).map((g: any, i: number) => (
+                  <span key={g.id ?? i} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name || g}</span>
                 ))}
                 {heroGame.rating && (
                   <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {Number(heroGame.rating).toFixed(1)}</span>

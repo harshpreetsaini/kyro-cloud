@@ -15,31 +15,40 @@ interface Provider {
   loggedIn: boolean;
   username?: string;
   gameCount?: number;
-  installMethod: string;
+  method: "oauth" | "agent" | "coming";
 }
 
 const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount">[] = [
-  { id: "steam", name: "Steam", icon: "🎮", description: "Valve's gaming platform — 50,000+ games", color: "from-blue-600 to-blue-800", installMethod: "steamcmd" },
-  { id: "epic", name: "Epic Games", icon: "🎯", description: "Epic Games Store — exclusives + free weekly games", color: "from-gray-700 to-gray-900", installMethod: "legendary" },
-  { id: "gog", name: "GOG", icon: "💎", description: "DRM-free games — you own what you buy", color: "from-purple-600 to-purple-800", installMethod: "lgogdownloader" },
-  { id: "ubisoft", name: "Ubisoft Connect", icon: "🌀", description: "Assassin's Creed, Far Cry, Rainbow Six", color: "from-blue-500 to-cyan-600", installMethod: "ubisoft" },
-  { id: "ea", name: "EA App", icon: "🏆", description: "FIFA, Battlefield, Need for Speed, Jedi", color: "from-blue-700 to-indigo-800", installMethod: "ea" },
-  { id: "xbox", name: "Xbox / Game Pass", icon: "🟢", description: "Game Pass library — hundreds of games", color: "from-green-600 to-green-800", installMethod: "xbox" },
-  { id: "battle", name: "Battle.net", icon: "⚔️", description: "Diablo, WoW, Overwatch, StarCraft", color: "from-blue-600 to-blue-700", installMethod: "battle" },
-  { id: "riot", name: "Riot Client", icon: "🔥", description: "League of Legends, Valorant, TFT", color: "from-red-600 to-red-800", installMethod: "riot" },
+  { id: "steam", name: "Steam", icon: "🎮", description: "Valve's gaming platform — 50,000+ games", color: "from-blue-600 to-blue-800", method: "oauth" },
+  { id: "epic", name: "Epic Games", icon: "🎯", description: "Epic Games Store — exclusives + free weekly games", color: "from-gray-700 to-gray-900", method: "oauth" },
+  { id: "gog", name: "GOG", icon: "💎", description: "DRM-free games — you own what you buy", color: "from-purple-600 to-purple-800", method: "oauth" },
+  { id: "ubisoft", name: "Ubisoft Connect", icon: "🌀", description: "Assassin's Creed, Far Cry, Rainbow Six", color: "from-blue-500 to-cyan-600", method: "coming" },
+  { id: "ea", name: "EA App", icon: "🏆", description: "FIFA, Battlefield, Need for Speed, Jedi", color: "from-blue-700 to-indigo-800", method: "coming" },
+  { id: "xbox", name: "Xbox / Game Pass", icon: "🟢", description: "Game Pass library — hundreds of games", color: "from-green-600 to-green-800", method: "coming" },
+  { id: "battle", name: "Battle.net", icon: "⚔️", description: "Diablo, WoW, Overwatch, StarCraft", color: "from-blue-600 to-blue-700", method: "coming" },
+  { id: "riot", name: "Riot Client", icon: "🔥", description: "League of Legends, Valorant, TFT", color: "from-red-600 to-red-800", method: "coming" },
 ];
 
 export default function ProvidersPage() {
-  const { connected, installProgress } = useRuntime();
+  const { connected } = useRuntime();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loginProvider, setLoginProvider] = useState<string | null>(null);
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginSuccess, setLoginSuccess] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Check URL for OAuth callback results
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("success");
+    const error = params.get("error");
+    if (success) setLoginError(null);
+    if (error) setLoginError(`Authentication failed: ${error}`);
+
+    // Clean URL
+    if (success || error) {
+      window.history.replaceState({}, "", "/providers");
+    }
+
     fetchProviders();
   }, []);
 
@@ -59,30 +68,21 @@ export default function ProvidersPage() {
     }
   };
 
-  const handleLogin = async (providerId: string) => {
-    if (!loginForm.username || !loginForm.password) {
-      setLoginError("Username and password are required");
-      return;
-    }
+  const handleOAuthLogin = async (providerId: string) => {
     setLoginError(null);
-    setLoginSuccess(null);
-
     try {
       const res = await fetch(api(`/api/providers/${providerId}/login`), {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
-        body: JSON.stringify(loginForm),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
-      if (data.ok) {
-        setLoginSuccess(`Logged into ${providerId} successfully!`);
-        setLoginProvider(null);
-        setLoginForm({ username: "", password: "" });
-        fetchProviders();
+      if (data.ok && data.data?.redirectUrl) {
+        window.location.href = data.data.redirectUrl;
       } else {
-        setLoginError(data.error || "Login failed");
+        setLoginError(data.data?.message || "Login failed");
       }
-    } catch (e) {
+    } catch {
       setLoginError("Connection failed. Is the runtime connected?");
     }
   };
@@ -95,11 +95,8 @@ export default function ProvidersPage() {
         headers: { "content-type": "application/json", ...authHeader() },
       });
       const data = await res.json();
-      if (data.ok) {
-        fetchProviders();
-      }
-    } catch {
-    } finally {
+      if (data.ok) fetchProviders();
+    } catch {} finally {
       setSyncing(null);
     }
   };
@@ -110,6 +107,8 @@ export default function ProvidersPage() {
         method: "POST",
         headers: { ...authHeader() },
       });
+      // Clear cookie
+      document.cookie = `provider_${providerId}=; path=/; max-age=0`;
       fetchProviders();
     } catch {}
   };
@@ -136,13 +135,13 @@ export default function ProvidersPage() {
 
       {!connected && (
         <div className="panel p-4 border border-yellow-500/20 bg-yellow-500/5">
-          <p className="text-sm text-yellow-400">⚠ Runtime offline — connect your cloud PC first to log in and sync libraries</p>
+          <p className="text-sm text-yellow-400">⚠ Runtime offline — connect your cloud PC first to sync libraries</p>
         </div>
       )}
 
-      {loginSuccess && (
-        <div className="panel p-4 border border-success/20 bg-success/5">
-          <p className="text-sm text-success">✓ {loginSuccess}</p>
+      {loginError && (
+        <div className="panel p-4 border border-danger/20 bg-danger/5">
+          <p className="text-sm text-danger">✕ {loginError}</p>
         </div>
       )}
 
@@ -158,6 +157,8 @@ export default function ProvidersPage() {
                   <h3 className="font-semibold">{provider.name}</h3>
                   {provider.loggedIn ? (
                     <Badge tone="success">Connected</Badge>
+                  ) : provider.method === "coming" ? (
+                    <Badge tone="neutral">Coming Soon</Badge>
                   ) : (
                     <Badge tone="neutral">Not Connected</Badge>
                   )}
@@ -185,35 +186,13 @@ export default function ProvidersPage() {
                   </Button>
                 </div>
               </div>
-            ) : loginProvider === provider.id ? (
-              <div className="flex flex-col gap-3">
-                <input
-                  type="text"
-                  placeholder="Username / Email"
-                  value={loginForm.username}
-                  onChange={(e) => setLoginForm((f) => ({ ...f, username: e.target.value }))}
-                  className="bg-secondary/60 border border-white/5 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-accent"
-                />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm((f) => ({ ...f, password: e.target.value }))}
-                  className="bg-secondary/60 border border-white/5 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-accent"
-                />
-                {loginError && <p className="text-xs text-danger">{loginError}</p>}
-                <div className="flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={() => handleLogin(provider.id)} disabled={!connected}>
-                    {connected ? "Login" : "Connect Runtime First"}
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => { setLoginProvider(null); setLoginError(null); }}>
-                    Cancel
-                  </Button>
-                </div>
-              </div>
+            ) : provider.method === "oauth" ? (
+              <Button size="sm" className="w-full" onClick={() => handleOAuthLogin(provider.id)}>
+                Login with {provider.name}
+              </Button>
             ) : (
-              <Button size="sm" variant="secondary" className="w-full" onClick={() => { setLoginProvider(provider.id); setLoginError(null); }} disabled={!connected}>
-                {connected ? "Connect Account" : "Connect Runtime First"}
+              <Button size="sm" variant="secondary" className="w-full" disabled>
+                Coming Soon
               </Button>
             )}
           </div>
@@ -226,7 +205,7 @@ export default function ProvidersPage() {
         <div className="grid sm:grid-cols-3 gap-4 text-sm text-muted">
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">01</span>
-            <p>Log into your gaming account (Steam, Epic, etc.) through the secure agent on your cloud PC</p>
+            <p>Click Login and sign in through the official provider page (Steam, Epic, GOG)</p>
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">02</span>
@@ -234,7 +213,7 @@ export default function ProvidersPage() {
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">03</span>
-            <p>Click Install on any owned game — it downloads to your cloud PC via the platform client</p>
+            <p>Click Install on any owned game — it downloads to your cloud PC</p>
           </div>
         </div>
       </div>
