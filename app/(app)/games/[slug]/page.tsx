@@ -10,24 +10,6 @@ import { Button, Skeleton, Badge } from "@/components/ui";
 import { runtimeAction } from "@/lib/runtime/store";
 import type { GameEntry } from "@shared/types";
 
-// Gradient colors for game art placeholders
-const GRADIENTS = [
-  "from-purple-900/80 to-blue-900/80",
-  "from-blue-900/80 to-cyan-900/80",
-  "from-green-900/80 to-teal-900/80",
-  "from-orange-900/80 to-red-900/80",
-  "from-pink-900/80 to-purple-900/80",
-  "from-indigo-900/80 to-violet-900/80",
-];
-
-function getGradient(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = id.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
-}
-
 type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | "starting_stream" | "launching_game" | "connecting" | "ready" | "error";
 
 export default function GameDetailsPage() {
@@ -39,19 +21,15 @@ export default function GameDetailsPage() {
   const [error, setError] = useState<string | null>(null);
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [imgError, setImgError] = useState(false);
 
   useEffect(() => {
     const slug = params.slug as string;
     fetch(api("/api/games"), { headers: { ...authHeader() } })
       .then((r) => r.json())
       .then((j) => {
-        const games = j.data || [];
-        const found = games.find((g: GameEntry) => g.slug === slug || g.id === slug);
-        if (found) {
-          setGame(found);
-        } else {
-          setError("Game not found");
-        }
+        const found = (j.data || []).find((g: GameEntry) => g.slug === slug || g.id === slug);
+        found ? setGame(found) : setError("Game not found");
       })
       .catch(() => setError("Failed to load game"))
       .finally(() => setLoading(false));
@@ -59,38 +37,21 @@ export default function GameDetailsPage() {
 
   const handlePlay = useCallback(async () => {
     if (!game) return;
-    
     setLaunchState("checking");
     setLaunchError(null);
-
     try {
-      // Check if runtime is active
       const isOffline = !session || session.state === "OFFLINE" || session.state === "STOPPED" || session.state === "DISCONNECTED";
-      
       if (isOffline) {
-        // Start the runtime
         setLaunchState("starting_runtime");
         await runtimeAction("start");
-        
-        // Wait for runtime to be ready (poll session state)
         await waitForState("STREAMING", 120000);
       }
-
       setLaunchState("launching_game");
-      // Launch the game
       launchGame(game.id);
-      
-      // Wait for game to be running
       setLaunchState("connecting");
       await waitForGameRunning(game.id, 30000);
-      
       setLaunchState("ready");
-      
-      // Redirect to fullscreen session after a short delay
-      setTimeout(() => {
-        router.push("/session");
-      }, 1500);
-      
+      setTimeout(() => router.push("/session"), 1500);
     } catch (err) {
       setLaunchState("error");
       setLaunchError(String(err));
@@ -99,40 +60,20 @@ export default function GameDetailsPage() {
 
   const waitForState = (targetState: string, timeoutMs: number): Promise<void> => {
     return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const checkInterval = setInterval(() => {
-        if (Date.now() - startTime > timeoutMs) {
-          clearInterval(checkInterval);
-          reject(new Error("Timeout waiting for runtime"));
-          return;
-        }
-        // Check session state
-        if (session?.state === targetState) {
-          clearInterval(checkInterval);
-          resolve();
-        }
-        if (session?.state === "ERROR") {
-          clearInterval(checkInterval);
-          reject(new Error("Runtime failed to start"));
-        }
+      const start = Date.now();
+      const iv = setInterval(() => {
+        if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("Timeout waiting for runtime")); return; }
+        if (session?.state === targetState) { clearInterval(iv); resolve(); }
+        if (session?.state === "ERROR") { clearInterval(iv); reject(new Error("Runtime failed to start")); }
       }, 1000);
     });
   };
 
   const waitForGameRunning = (gameId: string, timeoutMs: number): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const checkInterval = setInterval(() => {
-        if (Date.now() - startTime > timeoutMs) {
-          clearInterval(checkInterval);
-          // Don't reject - game might be running even if we can't detect it
-          resolve();
-          return;
-        }
-        if (runningGames.includes(gameId)) {
-          clearInterval(checkInterval);
-          resolve();
-        }
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const iv = setInterval(() => {
+        if (Date.now() - start > timeoutMs || runningGames.includes(gameId)) { clearInterval(iv); resolve(); }
       }, 500);
     });
   };
@@ -140,11 +81,11 @@ export default function GameDetailsPage() {
   if (loading) {
     return (
       <div className="flex flex-col gap-6">
-        <Skeleton className="h-[300px] rounded-xl" />
-        <div className="flex flex-col gap-4">
+        <div className="relative h-[350px] rounded-2xl overflow-hidden bg-secondary/40 animate-pulse" />
+        <div className="flex flex-col gap-4 max-w-3xl">
           <Skeleton className="h-8 w-64" />
           <Skeleton className="h-4 w-96" />
-          <Skeleton className="h-10 w-32" />
+          <Skeleton className="h-12 w-32" />
         </div>
       </div>
     );
@@ -153,10 +94,8 @@ export default function GameDetailsPage() {
   if (error || !game) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <p className="text-muted">{error || "Game not found"}</p>
-        <Link href="/games">
-          <Button variant="secondary">Back to Games</Button>
-        </Link>
+        <p className="text-muted text-lg">{error || "Game not found"}</p>
+        <Link href="/games"><Button variant="secondary">Back to Games</Button></Link>
       </div>
     );
   }
@@ -165,105 +104,94 @@ export default function GameDetailsPage() {
   const isRunning = runningGames.includes(game.id);
   const isLaunching = launchState !== "idle" && launchState !== "ready" && launchState !== "error";
 
+  const launchSteps = [
+    { label: "Cloud runtime", status: (launchState === "starting_runtime" ? "active" : ["preparing_gpu","starting_stream","launching_game","connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
+    { label: "GPU", status: (launchState === "preparing_gpu" ? "active" : ["starting_stream","launching_game","connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
+    { label: "Game environment", status: (launchState === "starting_stream" ? "active" : ["launching_game","connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
+    { label: "Launch game", status: (launchState === "launching_game" ? "active" : ["connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
+    { label: "Connect stream", status: (launchState === "connecting" ? "active" : launchState === "ready" ? "done" : "pending") as "pending"|"active"|"done" },
+  ];
+
   return (
     <div className="flex flex-col gap-6">
-      {/* Hero Section */}
-      <section className="relative h-[300px] rounded-xl overflow-hidden">
-        <div className={`absolute inset-0 bg-gradient-to-br ${getGradient(game.id)}`} />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+      {/* Hero */}
+      <section className="relative h-[350px] rounded-2xl overflow-hidden group">
+        {game.heroImage && !imgError ? (
+          <img src={game.heroImage} alt="" className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+        ) : game.coverImage && !imgError ? (
+          <img src={game.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40" onError={() => setImgError(true)} />
+        ) : (
+          <div className="absolute inset-0 bg-gradient-to-br from-accent/30 to-secondary" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
         <div className="absolute inset-0 flex flex-col justify-end p-8">
           <div className="max-w-3xl">
             <div className="flex items-center gap-2 mb-3">
               {game.genres?.slice(0, 3).map((g) => (
-                <span key={g.id} className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/80">
-                  {g.name}
-                </span>
+                <span key={g.id} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name}</span>
               ))}
               {game.rating && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">
-                  ★ {game.rating.toFixed(1)}
-                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {game.rating.toFixed(1)}</span>
+              )}
+              {game.metacritic && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent/20 text-accent font-medium">MC {game.metacritic}</span>
               )}
             </div>
-            <h1 className="text-4xl font-bold text-white mb-2">{game.name}</h1>
-            <p className="text-white/70 line-clamp-2">{game.shortDescription || game.description}</p>
+            <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">{game.name}</h1>
+            <p className="text-white/60 line-clamp-2 max-w-2xl">{game.shortDescription || game.description}</p>
           </div>
         </div>
       </section>
 
-      {/* Launch Status Overlay */}
+      {/* Launch progress */}
       {isLaunching && (
         <section className="panel p-6">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 rounded-full border-4 border-accent/30 border-t-accent animate-spin" />
-            <div className="text-center">
-              <h3 className="font-semibold text-lg mb-1">
-                {launchState === "checking" && "Checking Runtime..."}
-                {launchState === "starting_runtime" && "Starting Cloud PC..."}
-                {launchState === "preparing_gpu" && "Preparing GPU..."}
-                {launchState === "starting_stream" && "Starting Stream..."}
-                {launchState === "launching_game" && `Launching ${game.name}...`}
-                {launchState === "connecting" && "Connecting to Game..."}
-              </h3>
-              <p className="text-sm text-muted">
-                {launchState === "starting_runtime" && "This may take a minute on first start"}
-                {launchState === "launching_game" && "Starting the game through your launcher"}
-              </p>
-            </div>
+          <h3 className="font-semibold text-lg mb-4">Starting {game.name}...</h3>
+          <div className="flex flex-col gap-2.5">
+            {launchSteps.map((step, i) => (
+              <div key={i} className="flex items-center gap-3 text-sm">
+                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 ${
+                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-white animate-pulse-soft" : "bg-secondary text-muted"
+                }`}>
+                  {step.status === "done" ? "✓" : i + 1}
+                </span>
+                <span className={step.status === "pending" ? "text-muted" : "text-text"}>{step.label}</span>
+              </div>
+            ))}
           </div>
         </section>
       )}
 
-      {/* Launch Error */}
+      {/* Error */}
       {launchState === "error" && (
         <section className="panel p-6 border-danger/30">
-          <div className="flex flex-col items-center gap-4">
-            <div className="text-center">
-              <h3 className="font-semibold text-lg mb-1 text-danger">Launch Failed</h3>
-              <p className="text-sm text-muted mb-4">{launchError || "Failed to launch game"}</p>
-              <Button variant="secondary" onClick={() => setLaunchState("idle")}>
-                Try Again
-              </Button>
-            </div>
-          </div>
+          <h3 className="font-semibold text-lg mb-1 text-danger">Launch Failed</h3>
+          <p className="text-sm text-muted mb-4">{launchError || "Failed to launch game"}</p>
+          <Button variant="secondary" onClick={() => setLaunchState("idle")}>Try Again</Button>
         </section>
       )}
 
-      {/* Action Section */}
-      <section className="flex flex-col md:flex-row gap-6">
-        <div className="flex-1">
-          {/* Play Button */}
+      {/* Content */}
+      <section className="flex flex-col lg:flex-row gap-6">
+        <div className="flex-1 min-w-0">
+          {/* Play/Install */}
           <div className="flex flex-col gap-4 mb-6">
             {primaryProvider && (
               <div className="flex items-center gap-2 text-sm text-muted">
-                <span>Available through</span>
+                <span>Playing through</span>
                 <Badge tone="neutral">{primaryProvider.name}</Badge>
               </div>
             )}
             <div className="flex gap-3">
               {game.installed ? (
-                <Button
-                  size="lg"
-                  onClick={handlePlay}
-                  disabled={isRunning || isLaunching}
-                  className="bg-accent hover:bg-accent/90"
-                >
-                  {isRunning ? "Running" : isLaunching ? "Starting..." : "Play Now"}
+                <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching}>
+                  {isRunning ? "● Running" : isLaunching ? "Starting..." : "Play Now"}
                 </Button>
               ) : (
-                <Button size="lg" variant="secondary" disabled>
-                  Install Required
-                </Button>
+                <Button size="lg" variant="secondary" disabled>Install Required</Button>
               )}
               {isRunning && (
-                <Button
-                  size="lg"
-                  variant="secondary"
-                  onClick={() => {
-                    stopGame(game.id);
-                    setLaunchState("idle");
-                  }}
-                >
+                <Button size="lg" variant="danger" onClick={() => { stopGame(game.id); setLaunchState("idle"); }}>
                   Stop Game
                 </Button>
               )}
@@ -273,25 +201,29 @@ export default function GameDetailsPage() {
           {/* About */}
           <div className="mb-6">
             <h2 className="text-lg font-semibold mb-3">About This Game</h2>
-            <p className="text-muted leading-relaxed">{game.description}</p>
+            <p className="text-muted leading-relaxed text-sm">{game.description}</p>
           </div>
+
+          {/* Tags */}
+          {game.tags && game.tags.length > 0 && (
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold mb-3">Tags</h2>
+              <div className="flex flex-wrap gap-2">
+                {game.tags.map((tag) => (
+                  <span key={tag} className="text-xs px-2.5 py-1 rounded-full bg-secondary text-muted">{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Screenshots */}
           {game.screenshots && game.screenshots.length > 0 && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold mb-3">Screenshots</h2>
               <div className="grid grid-cols-2 gap-3">
-                {game.screenshots.slice(0, 4).map((screenshot) => (
-                  <div
-                    key={screenshot.id}
-                    className="aspect-video rounded-lg bg-secondary overflow-hidden"
-                  >
-                    <img
-                      src={screenshot.url}
-                      alt="Game screenshot"
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                    />
+                {game.screenshots.slice(0, 4).map((s) => (
+                  <div key={s.id} className="aspect-video rounded-lg bg-secondary overflow-hidden">
+                    <img src={s.url} alt={`${game.name} screenshot`} className="w-full h-full object-cover" loading="lazy" />
                   </div>
                 ))}
               </div>
@@ -300,89 +232,49 @@ export default function GameDetailsPage() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full md:w-80 flex flex-col gap-4">
-          {/* Game Info */}
+        <div className="w-full lg:w-80 flex flex-col gap-4 shrink-0">
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Game Information</h3>
             <div className="flex flex-col gap-2 text-sm">
-              {game.genres && game.genres.length > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Genre</span>
-                  <span>{game.genres.map((g) => g.name).join(", ")}</span>
-                </div>
-              )}
-              {game.releaseDate && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Release</span>
-                  <span>{new Date(game.releaseDate).getFullYear()}</span>
-                </div>
-              )}
-              {game.developer && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Developer</span>
-                  <span>{game.developer}</span>
-                </div>
-              )}
-              {game.publisher && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Publisher</span>
-                  <span>{game.publisher}</span>
-                </div>
-              )}
-              {game.platforms && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Platform</span>
-                  <span>{game.platforms.join(", ")}</span>
-                </div>
-              )}
+              {game.genres && game.genres.length > 0 && <InfoRow label="Genre" value={game.genres.map((g: { name: string }) => g.name).join(", ")} />}
+              {game.releaseDate && <InfoRow label="Release" value={new Date(game.releaseDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })} />}
+              {game.developer && <InfoRow label="Developer" value={game.developer} />}
+              {game.publisher && <InfoRow label="Publisher" value={game.publisher} />}
+              {game.rating && <InfoRow label="Rating" value={`★ ${game.rating.toFixed(1)}`} />}
+              {game.metacritic && <InfoRow label="Metacritic" value={String(game.metacritic)} />}
             </div>
           </div>
 
-          {/* Cloud Info */}
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Cloud Gaming</h3>
             <div className="flex flex-col gap-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted">Resolution</span>
-                <span>1080p</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted">Target FPS</span>
-                <span>60</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted">Controller</span>
-                <span>Supported</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted">Status</span>
-                <Badge tone={game.installed ? "success" : "warning"}>
-                  {game.installed ? "Installed" : "Not Installed"}
-                </Badge>
-              </div>
+              <InfoRow label="Resolution" value="Up to 1080p" />
+              <InfoRow label="Target FPS" value="60" />
+              <InfoRow label="Controller" value={game.controllerSupport === "full" ? "Full Support" : game.controllerSupport === "none" ? "Not Supported" : "Partial"} />
+              <InfoRow label="Status" value={game.installed ? "✓ Installed" : "○ Not Installed"} />
             </div>
           </div>
 
-          {/* Provider Info */}
           {primaryProvider && (
             <div className="panel p-4">
               <h3 className="text-sm font-semibold mb-3">Launch Provider</h3>
               <div className="flex flex-col gap-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted">Provider</span>
-                  <span>{primaryProvider.name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">Status</span>
-                  <Badge tone={primaryProvider.availability === "available" ? "success" : "warning"}>
-                    {primaryProvider.availability === "available" ? "Available" : "Unavailable"}
-                  </Badge>
-                </div>
+                <InfoRow label="Provider" value={primaryProvider.name} />
+                <InfoRow label="Status" value={primaryProvider.availability === "available" ? "✓ Available" : "○ Unavailable"} />
               </div>
             </div>
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-muted">{label}</span>
+      <span className="text-right">{value}</span>
     </div>
   );
 }

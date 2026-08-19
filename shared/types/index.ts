@@ -116,6 +116,7 @@ export interface GameEntry {
   publisher?: string;
   genres?: GameGenre[];
   rating?: number;
+  metacritic?: number;
   platforms?: string[];
   providers: GameProvider[];
   availability: GameAvailability;
@@ -125,6 +126,8 @@ export interface GameEntry {
   playTime?: number;
   running?: boolean;
   installState?: "idle" | "installing" | "updating";
+  tags?: string[];
+  controllerSupport?: "full" | "partial" | "none";
   // Legacy fields for backward compatibility
   executable?: string;
   arguments?: string;

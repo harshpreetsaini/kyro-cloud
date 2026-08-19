@@ -26,7 +26,7 @@ const config: Config = {
         display: ["var(--font-display)", "system-ui", "sans-serif"],
       },
       borderRadius: {
-        lg: "14px",
+        lg: "12px",
         xl: "20px",
       },
       keyframes: {
@@ -38,10 +38,15 @@ const config: Config = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.55" },
         },
+        shimmer: {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.18s ease-out",
         "pulse-soft": "pulse-soft 1.6s ease-in-out infinite",
+        shimmer: "shimmer 1.5s ease-in-out infinite",
       },
     },
   },

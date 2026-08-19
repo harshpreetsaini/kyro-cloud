@@ -1,15 +1,15 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import Link from "next/link";
 import { GameCard } from "@/components/GameCard";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
-import { Button, Skeleton, EmptyState } from "@/components/ui";
+import { Button, Skeleton, SkeletonCard, EmptyState } from "@/components/ui";
 import type { GameEntry } from "@shared/types";
 
 type FilterType = "all" | "installed" | "running";
+type SortType = "rating" | "name" | "release" | "metacritic";
 
 export default function GamesPage() {
   const { launchGame, stopGame, runningGames } = useRuntime();
@@ -17,142 +17,121 @@ export default function GamesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterType>("all");
+  const [sort, setSort] = useState<SortType>("rating");
+  const [genre, setGenre] = useState<string>("");
+  const [genres, setGenres] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(api("/api/games"), { headers: { ...authHeader() } })
       .then((r) => r.json())
-      .then((j) => setGames(j.data || []))
+      .then((j) => {
+        setGames(j.data || []);
+        if (j.meta?.genres) setGenres(j.meta.genres);
+      })
       .finally(() => setLoading(false));
   }, []);
 
   const filteredGames = useMemo(() => {
     let result = games;
-
-    // Apply search filter
     if (search) {
       const q = search.toLowerCase();
-      result = result.filter(
-        (g) =>
-          g.name.toLowerCase().includes(q) ||
-          g.id.toLowerCase().includes(q)
+      result = result.filter((g) =>
+        g.name.toLowerCase().includes(q) || g.developer?.toLowerCase().includes(q) || g.tags?.some((t: string) => t.toLowerCase().includes(q))
       );
     }
-
-    // Apply type filter
+    if (genre) result = result.filter((g) => g.genres?.some((gr) => gr.name.toLowerCase() === genre.toLowerCase()));
     switch (filter) {
-      case "installed":
-        result = result.filter((g) => g.installed);
-        break;
-      case "running":
-        result = result.filter((g) => runningGames.includes(g.id));
-        break;
+      case "installed": result = result.filter((g) => g.installed); break;
+      case "running": result = result.filter((g) => runningGames.includes(g.id)); break;
     }
-
+    switch (sort) {
+      case "rating": result = [...result].sort((a, b) => (b.rating || 0) - (a.rating || 0)); break;
+      case "name": result = [...result].sort((a, b) => a.name.localeCompare(b.name)); break;
+      case "release": result = [...result].sort((a, b) => new Date(b.releaseDate || 0).getTime() - new Date(a.releaseDate || 0).getTime()); break;
+      case "metacritic": result = [...result].sort((a, b) => (b.metacritic || 0) - (a.metacritic || 0)); break;
+    }
     return result;
-  }, [games, search, filter, runningGames]);
+  }, [games, search, filter, sort, genre, runningGames]);
 
   const installed = games.filter((g) => g.installed).length;
   const running = games.filter((g) => runningGames.includes(g.id)).length;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="font-display text-xl">Game Library</h2>
-        <span className="text-xs text-muted">
-          {loading ? "Loading…" : `${installed} installed${running > 0 ? ` · ${running} running` : ""}`}
-        </span>
+        <div>
+          <h2 className="text-xl font-semibold">All Games</h2>
+          <p className="text-sm text-muted mt-0.5">
+            {loading ? "Loading..." : `${filteredGames.length} games${installed > 0 ? ` · ${installed} installed` : ""}`}
+          </p>
+        </div>
       </div>
 
-      {/* Search and filter bar */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <input
-            type="text"
-            placeholder="Search games..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-secondary rounded-lg px-3 py-2 pl-8 text-sm outline-none focus:ring-1 focus:ring-accent"
-          />
-          <svg
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
+      {/* Search + Filters */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <div className="relative flex-1 w-full max-w-md">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
+          <input
+            type="text"
+            placeholder="Search games, developers, tags..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-secondary/60 border border-white/5 rounded-lg px-3 py-2 pl-9 text-sm outline-none focus:ring-1 focus:ring-accent focus:border-accent/50 transition-colors"
+          />
         </div>
-        <div className="flex gap-1">
-          {(["all", "installed", "running"] as FilterType[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                filter === f
-                  ? "bg-accent text-white"
-                  : "bg-secondary text-muted hover:text-text"
-              }`}
-            >
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Filter tabs */}
+          <div className="flex gap-1 bg-secondary/40 rounded-lg p-0.5">
+            {(["all", "installed", "running"] as FilterType[]).map((f) => (
+              <button key={f} onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 text-xs rounded-md transition-all ${
+                  filter === f ? "bg-accent text-white" : "text-muted hover:text-text"
+                }`}>
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort */}
+          <select value={sort} onChange={(e) => setSort(e.target.value as SortType)}
+            className="bg-secondary/60 border border-white/5 rounded-lg px-2.5 py-1.5 text-xs text-muted outline-none focus:ring-1 focus:ring-accent">
+            <option value="rating">Top Rated</option>
+            <option value="name">A–Z</option>
+            <option value="release">Newest</option>
+            <option value="metacritic">Metacritic</option>
+          </select>
+
+          {/* Genre */}
+          <select value={genre} onChange={(e) => setGenre(e.target.value)}
+            className="bg-secondary/60 border border-white/5 rounded-lg px-2.5 py-1.5 text-xs text-muted outline-none focus:ring-1 focus:ring-accent">
+            <option value="">All Genres</option>
+            {genres.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
         </div>
       </div>
 
-      <p className="text-sm text-muted max-w-2xl">
-        Compatibility reflects the Linux compatibility layer (Steam + Proton/Wine). Windows-only titles without a
-        supported path are marked accordingly — no Windows support is faked.
-      </p>
-
+      {/* Grid */}
       {loading ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="panel overflow-hidden flex flex-col">
-              <Skeleton className="h-32 rounded-none" />
-              <div className="p-3 flex flex-col gap-2">
-                <Skeleton className="h-4 w-2/3" />
-                <Skeleton className="h-3 w-1/2" />
-                <div className="flex justify-between pt-1">
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-7 w-14" />
-                </div>
-              </div>
-            </div>
-          ))}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+          {Array.from({ length: 12 }).map((_, i) => <SkeletonCard key={i} />)}
         </div>
       ) : filteredGames.length === 0 ? (
-        <div className="panel">
-          <EmptyState
-            icon="▶"
-            title={search || filter !== "all" ? "NO GAMES MATCH" : "NO GAMES INSTALLED"}
-            description={
-              search || filter !== "all"
-                ? "Try adjusting your search or filter."
-                : "Install a supported game to see it in your library."
-            }
-            action={
-              search || filter !== "all" ? (
-                <Button variant="secondary" onClick={() => { setSearch(""); setFilter("all"); }}>
-                  Clear Filters
-                </Button>
-              ) : (
-                <Link href="/applications">
-                  <Button variant="secondary">Open Applications</Button>
-                </Link>
-              )
-            }
-          />
-        </div>
+        <EmptyState
+          icon="🎮"
+          title={search || filter !== "all" || genre ? "NO GAMES MATCH" : "NO GAMES FOUND"}
+          description={search || filter !== "all" || genre ? "Try adjusting your search or filters." : "Check back later for new games."}
+          action={(search || filter !== "all" || genre) ? (
+            <Button variant="secondary" onClick={() => { setSearch(""); setFilter("all"); setGenre(""); }}>Clear Filters</Button>
+          ) : undefined}
+        />
       ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
           {filteredGames.map((g) => (
-            <GameCard
-              key={g.id}
-              game={g}
-              running={runningGames.includes(g.id)}
-              onLaunch={launchGame}
-              onStop={stopGame}
-            />
+            <GameCard key={g.id} game={g} running={runningGames.includes(g.id)} onLaunch={launchGame} onStop={stopGame} />
           ))}
         </div>
       )}
