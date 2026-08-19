@@ -231,32 +231,42 @@ def start_vnc(payload=None) -> dict:
 
 
 def _detect_encoder():
-    """Detect the best available H.264 encoder.  Returns (encoder_element, needs_parse)."""
+    """Detect the best available H.264 encoder and screen capture source.
+    Returns (encoder_element, capture_element, needs_parse)."""
+    # Check if ximagesrc is available (needed for screen capture).
+    capture = "ximagesrc"
+    try:
+        r = subprocess.run(["gst-inspect-1.0", "ximagesrc"], capture_output=True, timeout=5)
+        if r.returncode != 0:
+            # Try XShm variant.
+            capture = "ximagesrc"
+            print("[stream] ximagesrc not found — GStreamer screen capture unavailable")
+    except Exception:
+        pass
+
     # Try NVENC first (GPU hardware encoding — lowest latency).
-    for enc in ("nvh264enc", "nvh264enc"):
+    for enc in ("nvh264enc",):
         try:
-            r = subprocess.run(
-                ["gst-inspect-1.0", enc], capture_output=True, timeout=5,
-            )
+            r = subprocess.run(["gst-inspect-1.0", enc], capture_output=True, timeout=5)
             if r.returncode == 0:
-                return enc, True
+                return enc, capture, True
         except Exception:
             pass
     # Try VAAPI (AMD/Intel GPU).
     try:
         r = subprocess.run(["gst-inspect-1.0", "vaapih264enc"], capture_output=True, timeout=5)
         if r.returncode == 0:
-            return "vaapih264enc", True
+            return "vaapih264enc", capture, True
     except Exception:
         pass
     # Fall back to x264enc (CPU software encoding — still much faster than x11vnc RFB).
     try:
         r = subprocess.run(["gst-inspect-1.0", "x264enc"], capture_output=True, timeout=5)
         if r.returncode == 0:
-            return "x264enc", True
+            return "x264enc", capture, True
     except Exception:
         pass
-    return None, False
+    return None, None, False
 
 
 def _start_audio_capture(ws_tunnel):
@@ -306,7 +316,7 @@ def start_gstreamer(payload=None) -> dict:
     if not start_desktop():
         return {"ok": False, "error": "desktop environment failed to start"}
 
-    encoder, needs_parse = _detect_encoder()
+    encoder, capture, needs_parse = _detect_encoder()
     if encoder is None:
         print("[stream] no GStreamer H.264 encoder found — falling back to VNC")
         return start_vnc(payload)
@@ -321,7 +331,7 @@ def start_gstreamer(payload=None) -> dict:
     enc_props = "bitrate=8000 tune=zerolatency" if "nv" in encoder else "speed-preset=ultrafast tune=zerolatency"
     pipeline = (
         f"gst-launch-1.0 -e "
-        f"ximagesrc display-name={DISPLAY} use-damage=false "
+        f"{capture} display-name={DISPLAY} use-damage=false "
         f"! video/x-raw,framerate={fps}/1 "
         f"! videoconvert "
         f"! video/x-raw,format=I420,width={width},height={height} "
@@ -406,6 +416,24 @@ def start_gstreamer(payload=None) -> dict:
 
     # Start audio capture in a separate thread.
     _start_audio_capture(VNC_TUNNEL)
+
+    # Watchdog: if GStreamer crashes within 5 seconds, fall back to VNC.
+    def _gst_watchdog():
+        time.sleep(5)
+        if _GSTREAMER_proc and _GSTREAMER_proc.poll() is not None:
+            err = ""
+            try:
+                err = _GSTREAMER_proc.stderr.read().decode(errors="replace")[:500]
+            except Exception:
+                pass
+            print(f"[stream] GStreamer crashed after 5s (code {_GSTREAMER_proc.returncode}): {err}")
+            print("[stream] falling back to VNC")
+            try:
+                VNC_TUNNEL.close()
+            except Exception:
+                pass
+            start_vnc(payload)
+    threading.Thread(target=_gst_watchdog, daemon=True).start()
 
     print("[stream] GStreamer GPU streaming started (NVENC/x264)")
     return {"ok": True, "encoder": encoder, "mode": "gstreamer"}

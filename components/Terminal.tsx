@@ -1,60 +1,88 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { wsUrl } from "@/lib/config/api";
 import { getToken } from "@/lib/auth/client";
 
 export function Terminal() {
-  const [output, setOutput] = useState("");
-  const [input, setInput] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const outRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const token = getToken();
-    const ws = new WebSocket(wsUrl("/ws/terminal") + (token ? `?token=${encodeURIComponent(token)}` : ""));
-    wsRef.current = ws;
-    ws.onmessage = (e) => {
-      setOutput((o) => o + e.data);
-      requestAnimationFrame(() => {
-        if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
-      });
-    };
-    return () => ws.close();
-  }, []);
+    if (!containerRef.current) return;
+    let cancelled = false;
 
-  function send(e: React.FormEvent) {
-    e.preventDefault();
-    if (!wsRef.current) return;
-    wsRef.current.send(input + "\n");
-    setInput("");
-  }
+    import("@xterm/xterm").then(({ Terminal }) => {
+      import("@xterm/addon-fit").then(({ FitAddon }) => {
+        import("@xterm/addon-web-links").then(({ WebLinksAddon }) => {
+          if (cancelled || !containerRef.current) return;
+
+          const term = new Terminal({
+            fontSize: 13,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+              background: "#0d1117",
+              foreground: "#c8d0e0",
+              cursor: "#58a6ff",
+              selectionBackground: "#264f78",
+            },
+            cursorBlink: true,
+            scrollback: 10000,
+            allowProposedApi: true,
+          });
+
+          const fitAddon = new FitAddon();
+          const webLinksAddon = new WebLinksAddon();
+          term.loadAddon(fitAddon);
+          term.loadAddon(webLinksAddon);
+          term.open(containerRef.current);
+          fitAddon.fit();
+          termRef.current = term;
+
+          const token = getToken();
+          const ws = new WebSocket(
+            wsUrl("/ws/terminal") + (token ? `?token=${encodeURIComponent(token)}` : "")
+          );
+          wsRef.current = ws;
+
+          ws.onmessage = (e) => {
+            term.write(e.data);
+          };
+
+          ws.onopen = () => {
+            term.writeln("\x1b[1;32mConnected to cloud terminal.\x1b[0m\r\n");
+          };
+
+          ws.onclose = () => {
+            term.writeln("\r\n\x1b[1;31mConnection closed.\x1b[0m");
+          };
+
+          term.onData((data: string) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(data);
+            }
+          });
+
+          const onResize = () => fitAddon.fit();
+          window.addEventListener("resize", onResize);
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      try { wsRef.current?.close(); } catch {}
+      try { termRef.current?.dispose(); } catch {}
+    };
+  }, []);
 
   return (
     <div className="panel flex flex-col h-[70vh] min-h-[360px] overflow-hidden">
       <div className="px-3 py-2 border-b border-white/5 text-xs uppercase tracking-wider text-muted flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-success" /> Terminal
       </div>
-      <div ref={outRef} className="flex-1 overflow-auto mono text-[13px] p-3 whitespace-pre-wrap text-[#c8d0e0]">
-        {output ? (
-          output
-        ) : (
-          <span className="flex items-center gap-2 text-muted">
-            <span className="w-3 h-3 rounded-full border-2 border-muted/40 border-t-accent animate-spin" /> Connecting
-            to runtime shell…
-          </span>
-        )}
-      </div>
-      <form onSubmit={send} className="flex border-t border-white/5">
-        <span className="px-3 py-2 mono text-accent">$</span>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          className="flex-1 bg-transparent outline-none mono text-[13px] py-2 pr-3"
-          placeholder="type a command and press Enter"
-          autoFocus
-        />
-      </form>
+      <div ref={containerRef} className="flex-1 min-h-0" />
     </div>
   );
 }
