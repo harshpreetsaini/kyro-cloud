@@ -187,6 +187,17 @@ export interface SessionInfo {
   error?: string | null;
 }
 
+export interface InstallProgress {
+  gameId: string;
+  state: "idle" | "checking" | "downloading" | "installing" | "verifying" | "ready" | "error";
+  percent: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speedBytesPerSec: number;
+  etaSeconds: number;
+  error?: string;
+}
+
 export interface SettingsState {
   resolution: "720p" | "900p" | "1080p" | "Auto";
   fps: 30 | 60 | "Auto";

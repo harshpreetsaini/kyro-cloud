@@ -8,20 +8,22 @@ import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
 import { runtimeAction } from "@/lib/runtime/store";
-import type { GameEntry } from "@shared/types";
+import type { GameEntry, InstallProgress } from "@shared/types";
 
 type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | "starting_stream" | "launching_game" | "connecting" | "ready" | "error";
 
 export default function GameDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { launchGame, stopGame, runningGames, session, connected } = useRuntime();
+  const { launchGame, stopGame, installGame, uninstallGame, runningGames, session, connected, installProgress } = useRuntime();
   const [game, setGame] = useState<GameEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [imgError, setImgError] = useState(false);
+  const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
+  const [loadingScreenshots, setLoadingScreenshots] = useState(false);
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -34,6 +36,38 @@ export default function GameDetailsPage() {
       .catch(() => setError("Failed to load game"))
       .finally(() => setLoading(false));
   }, [params.slug]);
+
+  // Fetch real screenshots from Steam API when game loads
+  useEffect(() => {
+    if (!game) return;
+    // Find Steam app ID from providers
+    const steamProvider = game.providers?.find((p) => p.name === "Steam" || p.name === "Steam Store");
+    const appId = steamProvider?.appId || game.id?.replace(/[^0-9]/g, "");
+    if (!appId || !/^\d+$/.test(appId)) {
+      // Try to extract numeric ID from game ID
+      const numericId = game.id?.replace(/\D/g, "");
+      if (numericId && /^\d{3,}$/.test(numericId)) {
+        fetchScreenshots(numericId);
+      }
+      return;
+    }
+    fetchScreenshots(appId);
+  }, [game?.id]);
+
+  const fetchScreenshots = async (appId: string) => {
+    setLoadingScreenshots(true);
+    try {
+      const res = await fetch(api(`/api/games/screenshots?appId=${appId}`));
+      const data = await res.json();
+      if (data.screenshots && data.screenshots.length > 0) {
+        setRealScreenshots(data.screenshots.map((s: any) => s.path_full || s.path_thin_crop));
+      }
+    } catch {
+      // Screenshots unavailable, will use hero/cover as fallback
+    } finally {
+      setLoadingScreenshots(false);
+    }
+  };
 
   const handlePlay = useCallback(async () => {
     if (!game) return;
@@ -57,6 +91,16 @@ export default function GameDetailsPage() {
       setLaunchError(String(err));
     }
   }, [game, session, launchGame, router]);
+
+  const handleInstall = useCallback(() => {
+    if (!game) return;
+    installGame(game.id);
+  }, [game, installGame]);
+
+  const handleUninstall = useCallback(() => {
+    if (!game) return;
+    uninstallGame(game.id);
+  }, [game, uninstallGame]);
 
   const waitForState = (targetState: string, timeoutMs: number): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -103,6 +147,8 @@ export default function GameDetailsPage() {
   const primaryProvider = game.providers?.[0];
   const isRunning = runningGames.includes(game.id);
   const isLaunching = launchState !== "idle" && launchState !== "ready" && launchState !== "error";
+  const install = installProgress[game.id];
+  const isInstalling = install && install.state !== "idle" && install.state !== "ready" && install.state !== "error";
 
   const launchSteps = [
     { label: "Cloud runtime", status: (launchState === "starting_runtime" ? "active" : ["preparing_gpu","starting_stream","launching_game","connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
@@ -111,6 +157,8 @@ export default function GameDetailsPage() {
     { label: "Launch game", status: (launchState === "launching_game" ? "active" : ["connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
     { label: "Connect stream", status: (launchState === "connecting" ? "active" : launchState === "ready" ? "done" : "pending") as "pending"|"active"|"done" },
   ];
+
+  const screenshotsToShow = realScreenshots.length > 0 ? realScreenshots : (game.screenshots?.map(s => s.url) || []);
 
   return (
     <div className="flex flex-col gap-6">
@@ -162,6 +210,42 @@ export default function GameDetailsPage() {
         </section>
       )}
 
+      {/* Install progress */}
+      {isInstalling && (
+        <section className="panel p-6">
+          <h3 className="font-semibold text-lg mb-4">
+            {install.state === "checking" && "Checking for updates..."}
+            {install.state === "downloading" && `Downloading ${game.name}...`}
+            {install.state === "installing" && `Installing ${game.name}...`}
+            {install.state === "verifying" && "Verifying installation..."}
+          </h3>
+          <div className="flex flex-col gap-3">
+            {/* Progress bar */}
+            <div className="w-full h-2 rounded-full bg-secondary overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-accent to-accent/60 transition-all duration-300 ease-out"
+                style={{ width: `${install.percent}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-sm text-muted">
+              <span>{Math.round(install.percent)}%</span>
+              {install.speedBytesPerSec > 0 && (
+                <span>{formatBytes(install.speedBytesPerSec)}/s</span>
+              )}
+              {install.etaSeconds > 0 && (
+                <span>ETA: {formatTime(install.etaSeconds)}</span>
+              )}
+              {install.totalBytes > 0 && (
+                <span>{formatBytes(install.downloadedBytes)} / {formatBytes(install.totalBytes)}</span>
+              )}
+            </div>
+            {install.state === "error" && (
+              <p className="text-sm text-danger">{install.error || "Installation failed"}</p>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Error */}
       {launchState === "error" && (
         <section className="panel p-6 border-danger/30">
@@ -183,16 +267,27 @@ export default function GameDetailsPage() {
               </div>
             )}
             <div className="flex gap-3">
-              {game.installed ? (
+              {game.installed || (install && install.state === "ready") ? (
                 <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching}>
                   {isRunning ? "● Running" : isLaunching ? "Starting..." : "Play Now"}
                 </Button>
+              ) : isInstalling ? (
+                <Button size="lg" variant="secondary" disabled>
+                  {install.state === "checking" ? "Checking..." : install.state === "downloading" ? `Downloading... ${Math.round(install.percent)}%` : install.state === "installing" ? "Installing..." : "Processing..."}
+                </Button>
               ) : (
-                <Button size="lg" variant="secondary" disabled>Install Required</Button>
+                <Button size="lg" onClick={handleInstall}>
+                  Download & Install
+                </Button>
               )}
               {isRunning && (
                 <Button size="lg" variant="danger" onClick={() => { stopGame(game.id); setLaunchState("idle"); }}>
                   Stop Game
+                </Button>
+              )}
+              {game.installed && !isRunning && (
+                <Button size="lg" variant="secondary" onClick={handleUninstall}>
+                  Uninstall
                 </Button>
               )}
             </div>
@@ -217,18 +312,51 @@ export default function GameDetailsPage() {
           )}
 
           {/* Screenshots */}
-          {game.screenshots && game.screenshots.length > 0 && (
+          {(loadingScreenshots || screenshotsToShow.length > 0) && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold mb-3">Screenshots</h2>
-              <div className="grid grid-cols-2 gap-3">
-                {game.screenshots.slice(0, 4).map((s) => (
-                  <div key={s.id} className="aspect-video rounded-lg bg-secondary overflow-hidden">
-                    <img src={s.url} alt={`${game.name} screenshot`} className="w-full h-full object-cover" loading="lazy" />
-                  </div>
-                ))}
-              </div>
+              {loadingScreenshots ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="aspect-video rounded-lg bg-secondary animate-pulse" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {screenshotsToShow.slice(0, 4).map((url, i) => (
+                    <div key={i} className="aspect-video rounded-lg bg-secondary overflow-hidden">
+                      <img src={url} alt={`${game.name} screenshot ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
+
+          {/* System Requirements (placeholder) */}
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">System Requirements</h2>
+            <div className="panel p-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-muted mb-1">Minimum</p>
+                  <p className="text-xs">OS: Windows 10 64-bit</p>
+                  <p className="text-xs">Processor: Intel Core i5-8400 / AMD Ryzen 5 2600</p>
+                  <p className="text-xs">Memory: 16 GB RAM</p>
+                  <p className="text-xs">Graphics: NVIDIA GTX 1070 / AMD RX 580</p>
+                  <p className="text-xs">Storage: 80 GB available space</p>
+                </div>
+                <div>
+                  <p className="text-muted mb-1">Recommended</p>
+                  <p className="text-xs">OS: Windows 10/11 64-bit</p>
+                  <p className="text-xs">Processor: Intel Core i7-10700K / AMD Ryzen 7 3800X</p>
+                  <p className="text-xs">Memory: 32 GB RAM</p>
+                  <p className="text-xs">Graphics: NVIDIA RTX 3070 / AMD RX 6800</p>
+                  <p className="text-xs">Storage: 80 GB SSD</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Sidebar */}
@@ -251,7 +379,8 @@ export default function GameDetailsPage() {
               <InfoRow label="Resolution" value="Up to 1080p" />
               <InfoRow label="Target FPS" value="60" />
               <InfoRow label="Controller" value={game.controllerSupport === "full" ? "Full Support" : game.controllerSupport === "none" ? "Not Supported" : "Partial"} />
-              <InfoRow label="Status" value={game.installed ? "✓ Installed" : "○ Not Installed"} />
+              <InfoRow label="Status" value={game.installed || (install?.state === "ready") ? "✓ Installed" : isInstalling ? "⟳ Installing" : "○ Not Installed"} />
+              <InfoRow label="Size" value="~80 GB" />
             </div>
           </div>
 
@@ -264,6 +393,14 @@ export default function GameDetailsPage() {
               </div>
             </div>
           )}
+
+          <div className="panel p-4">
+            <h3 className="text-sm font-semibold mb-3">Quick Actions</h3>
+            <div className="flex flex-col gap-2">
+              <Button variant="secondary" size="sm" className="w-full" disabled>Add to Favorites</Button>
+              <Button variant="secondary" size="sm" className="w-full" disabled>Share</Button>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -277,4 +414,20 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className="text-right">{value}</span>
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+function formatTime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
 }

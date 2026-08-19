@@ -1,6 +1,6 @@
 import { api, wsUrl } from "@/lib/config/api";
 import { getToken, authHeader } from "@/lib/auth/client";
-import type { SessionInfo, SystemInfo, SystemStats, StreamClientConfig } from "@shared/types";
+import type { SessionInfo, SystemInfo, SystemStats, StreamClientConfig, InstallProgress } from "@shared/types";
 
 export type AppState =
   | "NOT_INSTALLED"
@@ -42,6 +42,7 @@ interface RuntimeState {
   statsHistory: SystemStats[];
   runningGames: string[];
   apps: Record<string, AppEntry>;
+  installProgress: Record<string, InstallProgress>;
 }
 
 const EMPTY: RuntimeState = {
@@ -54,6 +55,7 @@ const EMPTY: RuntimeState = {
   statsHistory: [],
   runningGames: [],
   apps: {},
+  installProgress: {},
 };
 
 let state: RuntimeState = EMPTY;
@@ -187,6 +189,27 @@ function connect() {
         emit();
         break;
       }
+      case "game.install.progress": {
+        const p = event.payload as InstallProgress;
+        state = { ...state, installProgress: { ...state.installProgress, [p.gameId]: p } };
+        emit();
+        break;
+      }
+      case "game.install.done": {
+        const p = event.payload as { gameId: string; success: boolean; error?: string };
+        const prog = state.installProgress[p.gameId];
+        if (prog) {
+          state = {
+            ...state,
+            installProgress: {
+              ...state.installProgress,
+              [p.gameId]: { ...prog, state: p.success ? "ready" : "error", percent: p.success ? 100 : prog.percent, error: p.error },
+            },
+          };
+        }
+        emit();
+        break;
+      }
       default:
         break;
     }
@@ -207,6 +230,43 @@ export function runtimeLaunchGame(id: string) {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader() },
     body: JSON.stringify({ id }),
+  });
+}
+
+export function runtimeInstallGame(id: string) {
+  // Set local installing state immediately
+  state = {
+    ...state,
+    installProgress: {
+      ...state.installProgress,
+      [id]: { gameId: id, state: "checking", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 },
+    },
+  };
+  emit();
+
+  fetch(api(`/api/games/${id}/install`), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeader() },
+  }).catch(() => {
+    // If API fails, show error state
+    state = {
+      ...state,
+      installProgress: {
+        ...state.installProgress,
+        [id]: { gameId: id, state: "error", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0, error: "Failed to start installation" },
+      },
+    };
+    emit();
+  });
+}
+
+export function runtimeUninstallGame(id: string) {
+  fetch(api(`/api/games/${id}/uninstall`), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeader() },
+  }).then(() => {
+    delete state.installProgress[id];
+    emit();
   });
 }
 
