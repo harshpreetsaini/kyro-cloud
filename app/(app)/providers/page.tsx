@@ -56,7 +56,23 @@ export default function ProvidersPage() {
       const res = await fetch("/api/providers", { headers: { ...authHeader() } });
       const data = await res.json();
       if (data.ok && data.data) {
-        setProviders(data.data);
+        // Check cookies for actual login state
+        const enriched = data.data.map((p: Provider) => {
+          const cookieName = `provider_${p.id}`;
+          const cookieMatch = document.cookie.match(new RegExp(`(?:^|; )${cookieName}=([^;]*)`));
+          if (cookieMatch) {
+            try {
+              const session = JSON.parse(decodeURIComponent(cookieMatch[1]));
+              return {
+                ...p,
+                loggedIn: true,
+                username: session.displayName || session.username || session.name || session.steamId || p.username,
+              };
+            } catch {}
+          }
+          return p;
+        });
+        setProviders(enriched);
       } else {
         setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false })));
       }

@@ -5,10 +5,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const manager = getManager();
 
+  // Read auth tokens from cookies
+  const cookieName = `provider_${id}`;
+  const cookieValue = req.cookies.get(cookieName)?.value;
+  let authData: Record<string, any> = {};
+
+  if (cookieValue) {
+    try {
+      authData = JSON.parse(cookieValue);
+    } catch {}
+  }
+
+  // Send sync command to agent with auth data
   if (manager.sendToAgent) {
     manager.sendToAgent({
       type: "provider.sync",
-      payload: { provider: id },
+      payload: {
+        provider: id,
+        steamId: authData.steamId,
+        accessToken: authData.accessToken,
+        refreshToken: authData.refreshToken,
+        username: authData.username || authData.displayName || authData.name,
+      },
     });
   }
 

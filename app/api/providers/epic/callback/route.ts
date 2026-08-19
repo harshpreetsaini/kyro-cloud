@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const STORE: Record<string, { accountId: string; displayName: string; avatar: string; connectedAt: string }> = {};
+const STORE: Record<string, { accountId: string; displayName: string; accessToken: string; refreshToken: string; connectedAt: string }> = {};
 
 export function getEpicSession() {
   return STORE;
@@ -9,11 +9,12 @@ export function getEpicSession() {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
-  const state = searchParams.get("state");
 
   if (!code) {
     return NextResponse.redirect(new URL("/providers?error=epic_auth_failed", req.url));
   }
+
+  const origin = new URL(req.url).origin;
 
   // Exchange code for token (Epic uses a public client - no secret needed)
   try {
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
-        client_id: "875a544986424806b74309c7c139db15", // Epic Games Store client ID
+        client_id: "875a544986424806b74309c7c139db15",
       }),
     });
 
@@ -42,11 +43,13 @@ export async function GET(req: NextRequest) {
       STORE[accountId] = {
         accountId,
         displayName,
-        avatar: "",
+        accessToken: tokenData.access_token,
+        refreshToken: tokenData.refresh_token || "",
         connectedAt: new Date().toISOString(),
       };
 
       const response = NextResponse.redirect(new URL("/providers?success=epic&accountId=" + accountId, req.url));
+      // Store session data including token (non-httpOnly so frontend can read it for sync)
       response.cookies.set("provider_epic", JSON.stringify(STORE[accountId]), {
         httpOnly: false,
         path: "/",

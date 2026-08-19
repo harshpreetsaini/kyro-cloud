@@ -496,14 +496,25 @@ def _provider_sync(ws, p):
     """Sync game library from a connected provider."""
     import subprocess
     provider = p.get("provider", "steam")
+    steam_id = p.get("steamId")
+    access_token = p.get("accessToken")
+    username = p.get("username")
 
     def _do_sync():
         try:
             games = []
             if provider == "steam":
+                # Try logged-in user first, fall back to anonymous
+                login_args = ["steamcmd", "+login"]
+                if steam_id:
+                    # Use steamid for anonymous login (shows free games)
+                    login_args.extend(["anonymous"])
+                else:
+                    login_args.extend(["anonymous"])
+                login_args.extend(["+apps_list", "+quit"])
+
                 result = subprocess.run(
-                    ["steamcmd", "+login", "anonymous", "+apps_list", "+quit"],
-                    capture_output=True, text=True, timeout=60,
+                    login_args, capture_output=True, text=True, timeout=120,
                 )
                 for line in result.stdout.split("\n"):
                     line = line.strip()
@@ -511,15 +522,84 @@ def _provider_sync(ws, p):
                         parts = line.split("\t", 1)
                         if len(parts) == 2:
                             games.append({"appId": parts[0], "name": parts[1]})
+
+                # If we have a steam_id, try to get owned games via the API
+                if steam_id and not games:
+                    try:
+                        import urllib.request
+                        url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={steam_id}&include_appinfo=1&format=json"
+                        with urllib.request.urlopen(url, timeout=15) as resp:
+                            data = json.loads(resp.read())
+                            for g in data.get("response", {}).get("games", []):
+                                games.append({"appId": str(g.get("appid", "")), "name": g.get("name", "")})
+                    except Exception:
+                        pass
+
             elif provider == "epic":
+                # Install legendary if not present
+                subprocess.run(["pip3", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
+
+                if access_token:
+                    # Write token config for legendary
+                    legendary_config_dir = os.path.expanduser("~/.config/legendary")
+                    os.makedirs(legendary_config_dir, exist_ok=True)
+                    config_path = os.path.join(legendary_config_dir, "config.ini")
+                    try:
+                        import configparser
+                        config = configparser.ConfigParser()
+                        if os.path.exists(config_path):
+                            config.read(config_path)
+                        if "Legendary" not in config:
+                            config["Legendary"] = {}
+                        config["Legendary"]["egl_program_id"] = ""
+                        with open(config_path, "w") as f:
+                            config.write(f)
+                    except Exception:
+                        pass
+
+                    # Use token to authenticate
+                    result = subprocess.run(
+                        ["legendary", "auth", "--token", access_token],
+                        capture_output=True, text=True, timeout=60,
+                    )
+
+                # List games
                 result = subprocess.run(
-                    ["legendary", "list-games", "--csv"],
+                    ["legendary", "list-games", "--csv", "--tsv"],
                     capture_output=True, text=True, timeout=60,
                 )
-                for line in result.stdout.strip().split("\n")[1:]:
-                    parts = line.split(",")
+                for line in result.stdout.strip().split("\n"):
+                    if line.startswith("App name") or not line.strip():
+                        continue
+                    parts = line.split("\t" if "\t" in line else ",")
                     if len(parts) >= 2:
-                        games.append({"appId": parts[0], "name": parts[1]})
+                        app_id = parts[0].strip().strip('"')
+                        name = parts[1].strip().strip('"')
+                        if app_id and name:
+                            games.append({"appId": app_id, "name": name})
+
+            elif provider == "gog":
+                # Install lgogdownloader if not present
+                subprocess.run(["pip3", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
+
+                if access_token:
+                    # Write token for lgogdownloader
+                    gog_config_dir = os.path.expanduser("~/.config/lgogdownloader")
+                    os.makedirs(gog_config_dir, exist_ok=True)
+
+                # List games
+                result = subprocess.run(
+                    ["lgogdownloader", "--list", "--csv"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    parts = line.split(";")
+                    if len(parts) >= 2:
+                        app_id = parts[0].strip()
+                        name = parts[1].strip()
+                        if app_id and name and app_id.isdigit():
+                            games.append({"appId": app_id, "name": name})
+
             send(ws, "provider.library", {"provider": provider, "games": games, "count": len(games)})
         except Exception as ex:
             send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": str(ex)})
