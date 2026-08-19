@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
-import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Badge } from "@/components/ui";
 
@@ -54,7 +53,7 @@ export default function ProvidersPage() {
 
   const fetchProviders = async () => {
     try {
-      const res = await fetch(api("/api/providers"), { headers: { ...authHeader() } });
+      const res = await fetch("/api/providers", { headers: { ...authHeader() } });
       const data = await res.json();
       if (data.ok && data.data) {
         setProviders(data.data);
@@ -71,7 +70,7 @@ export default function ProvidersPage() {
   const handleOAuthLogin = async (providerId: string) => {
     setLoginError(null);
     try {
-      const res = await fetch(api(`/api/providers/${providerId}/login`), {
+      const res = await fetch(`/api/providers/${providerId}/login`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
         body: JSON.stringify({}),
@@ -90,7 +89,7 @@ export default function ProvidersPage() {
   const handleSyncLibrary = async (providerId: string) => {
     setSyncing(providerId);
     try {
-      const res = await fetch(api(`/api/providers/${providerId}/sync`), {
+      const res = await fetch(`/api/providers/${providerId}/sync`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
       });
@@ -103,7 +102,7 @@ export default function ProvidersPage() {
 
   const handleLogout = async (providerId: string) => {
     try {
-      await fetch(api(`/api/providers/${providerId}/logout`), {
+      await fetch(`/api/providers/${providerId}/logout`, {
         method: "POST",
         headers: { ...authHeader() },
       });
