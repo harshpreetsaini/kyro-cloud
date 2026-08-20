@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import random
+import signal
 
 import websocket  # websocket-client
 
@@ -22,10 +23,11 @@ PING_INTERVAL = 15
 _running = True
 _session_active = False
 _ws = None
-_ws_gen = 0            # incremented on every on_open — invalidates stale threads
-_stats_stop = None     # threading.Event to signal stats_loop to exit
-_terminal_procs = {}   # channel_id -> Popen
-_agent_pids = []       # PIDs of processes we spawned (for cleanup)
+_ws_gen = 0
+_stats_stop = None
+_terminal_procs = {}
+_agent_pids = []
+_lock = threading.Lock()  # Protects _terminal_procs, _agent_pids
 
 
 def url() -> str:
@@ -48,19 +50,6 @@ def agent_send(type_: str, payload=None):
         send(_ws, type_, payload)
 
 
-# ── Stats loop (generation-safe) ──────────────────────────────────────
-def stats_loop(ws, gen):
-    """Send telemetry every STATS_INTERVAL seconds. Exits if generation changes."""
-    while _running and _ws_gen == gen:
-        try:
-            send(ws, "stats", collect_stats())
-            send(ws, "system_info", system_info())
-        except Exception as e:
-            print(f"[agent] stats error: {e}")
-        time.sleep(STATS_INTERVAL)
-    print(f"[agent] stats_loop gen={gen} exiting (current gen={_ws_gen})")
-
-
 def _start_stats(ws, gen):
     """Start a new stats loop, stopping any previous one."""
     global _stats_stop
@@ -75,7 +64,6 @@ def _start_stats(ws, gen):
                 send(ws, "system_info", system_info())
             except Exception as e:
                 print(f"[agent] stats error: {e}")
-            # Sleep in small chunks so we can respond to stop_event quickly
             for _ in range(STATS_INTERVAL * 5):
                 if stop_event.is_set() or _ws_gen != gen:
                     return
@@ -345,10 +333,28 @@ def _files_list(p):
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
 
 
+ALLOWED_PATHS = ["/root", "/tmp", "/home", "/opt", "/var/tmp"]
+
+def _safe_path(p: str) -> str | None:
+    """Validate a path is within allowed directories. Returns resolved path or None."""
+    import pathlib
+    resolved = str(pathlib.Path(p).resolve())
+    if any(resolved.startswith(r) for r in ALLOWED_PATHS):
+        return resolved
+    return None
+
+
 def _files_read(p):
     rid = p.get("requestId", "")
+    path = _safe_path(p.get("path", ""))
+    if not path:
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Path not allowed"})
+        return
     try:
-        with open(p.get("path", ""), "rb") as f:
+        if os.path.getsize(path) > 10 * 1024 * 1024:
+            agent_send("files.result", {"requestId": rid, "ok": False, "error": "File too large (>10MB)"})
+            return
+        with open(path, "rb") as f:
             data = f.read()
         agent_send("files.result", {"requestId": rid, "ok": True, "data": list(data)})
     except Exception as e:
@@ -357,8 +363,12 @@ def _files_read(p):
 
 def _files_write(p):
     rid = p.get("requestId", "")
+    path = _safe_path(p.get("path", ""))
+    if not path:
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Path not allowed"})
+        return
     try:
-        with open(p.get("path", ""), "wb") as f:
+        with open(path, "wb") as f:
             f.write(bytes(p.get("content", [])))
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
@@ -368,8 +378,12 @@ def _files_write(p):
 def _files_mkdir(p):
     import pathlib
     rid = p.get("requestId", "")
+    path = _safe_path(p.get("path", "/"))
+    if not path:
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Path not allowed"})
+        return
     try:
-        pathlib.Path(p.get("path", "/")).mkdir(parents=True, exist_ok=True)
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
@@ -377,10 +391,14 @@ def _files_mkdir(p):
 
 def _files_rename(p):
     rid = p.get("requestId", "")
+    src = _safe_path(p.get("path", ""))
+    if not src:
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Path not allowed"})
+        return
     try:
         import pathlib
-        src = pathlib.Path(p.get("path", ""))
-        src.rename(src.parent / p.get("newName", ""))
+        s = pathlib.Path(src)
+        s.rename(s.parent / p.get("newName", ""))
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
@@ -389,7 +407,14 @@ def _files_rename(p):
 def _files_delete(p):
     import pathlib, shutil
     rid = p.get("requestId", "")
-    target = pathlib.Path(p.get("path", ""))
+    path = _safe_path(p.get("path", ""))
+    if not path:
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Path not allowed"})
+        return
+    if path in ("/", "/root", "/home", "/etc", "/usr", "/var"):
+        agent_send("files.result", {"requestId": rid, "ok": False, "error": "Cannot delete system directory"})
+        return
+    target = pathlib.Path(path)
     try:
         if target.is_dir():
             shutil.rmtree(target)
@@ -558,15 +583,15 @@ def _game_install(ws, p):
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
     install_dir = p.get("installDir", "/root/games")
+    provider_type = p.get("provider", "steam")
     auth_code = ""
-    for prov in ["steam", "epic", "gog"]:
-        auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{prov}_auth.txt")
-        if os.path.exists(auth_file):
-            try:
-                with open(auth_file) as f:
-                    auth_code = f.read().strip()
-            except Exception:
-                pass
+    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider_type}_auth.txt")
+    if os.path.exists(auth_file):
+        try:
+            with open(auth_file) as f:
+                auth_code = f.read().strip()
+        except Exception:
+            pass
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
@@ -677,6 +702,20 @@ def on_close(ws, *args):
 
 # ── Main loop with exponential backoff ─────────────────────────────────
 def main():
+    global _running
+
+    def _handle_signal(signum, frame):
+        print(f"[agent] received signal {signum}, shutting down...")
+        _running = False
+        if _stats_stop:
+            _stats_stop.set()
+        streaming.stop_all()
+        apps.stop_all()
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     print(f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING'}")
     attempt = 0
     while _running:

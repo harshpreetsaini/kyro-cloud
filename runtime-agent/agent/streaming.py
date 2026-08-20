@@ -298,12 +298,6 @@ def start_vnc(payload=None) -> dict:
     threading.Thread(target=vnc_to_ws, daemon=True).start()
     threading.Thread(target=ws_to_vnc, daemon=True).start()
     threading.Thread(target=_tunnel_keepalive, daemon=True).start()
-            except Exception:
-                break
-
-    threading.Thread(target=vnc_to_ws, daemon=True).start()
-    threading.Thread(target=ws_to_vnc, daemon=True).start()
-    threading.Thread(target=_tunnel_keepalive, daemon=True).start()
     return {"ok": True}
 
 
