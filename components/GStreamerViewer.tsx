@@ -31,6 +31,7 @@ export function GStreamerViewer({
   const lastFpsTimeRef = useRef(Date.now());
   const latencySumRef = useRef(0);
   const latencyCountRef = useRef(0);
+  const cancelledRef = useRef(false);
 
   // Load audio settings from localStorage
   const getAudioSettings = () => {
@@ -71,11 +72,11 @@ export function GStreamerViewer({
       }
     }, 1000);
 
-    let cancelled = false;
+    cancelledRef.current = false;
 
     // Try WebCodecs first, fall back to MSE.
     if ("VideoDecoder" in globalThis && "VideoDecoder" in window) {
-      setupWebCodecs(url, canvas, ctx, cancelled);
+      setupWebCodecs(url, canvas, ctx);
     } else {
       setupMSE(url, canvas, ctx);
     }
@@ -84,13 +85,12 @@ export function GStreamerViewer({
       wsUrl: string,
       canvas: HTMLCanvasElement,
       ctx: CanvasRenderingContext2D,
-      cancelled: boolean
     ) {
       let lastConfig = false;
 
       const decoder = new VideoDecoder({
         output: (frame: VideoFrame) => {
-          if (cancelled) { frame.close(); return; }
+          if (cancelledRef.current) { frame.close(); return; }
           canvas.width = frame.displayWidth;
           canvas.height = frame.displayHeight;
           ctx.drawImage(frame, 0, 0);
@@ -122,7 +122,7 @@ export function GStreamerViewer({
       wsRef.current = ws;
 
       ws.onmessage = (ev) => {
-        if (cancelled) return;
+        if (cancelledRef.current) return;
         if (typeof ev.data === "string") return;
 
         const rawData = new Uint8Array(ev.data);
@@ -197,7 +197,7 @@ export function GStreamerViewer({
 
       ws.onerror = () => setError("WebSocket connection failed");
       ws.onclose = () => {
-        if (!cancelled) setError("Stream ended");
+        if (!cancelledRef.current) setError("Stream ended");
       };
     }
 
@@ -263,7 +263,7 @@ export function GStreamerViewer({
     }
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       clearInterval(fpsInterval);
       try { decoderRef.current?.close(); } catch {}
       try { audioGainRef.current?.disconnect(); } catch {}

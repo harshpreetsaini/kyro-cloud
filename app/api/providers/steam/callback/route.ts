@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Server-side verification: re-post to Steam to verify the assertion
+  let verified = false;
   try {
     const verifyParams = new URLSearchParams();
     for (const [key, value] of searchParams.entries()) {
@@ -28,12 +29,14 @@ export async function GET(req: NextRequest) {
       body: verifyParams,
     });
     const verifyText = await verifyRes.text();
-
-    if (!verifyText.includes("is_valid:true")) {
-      return NextResponse.redirect(new URL("/providers?error=steam_verification_failed", req.url));
-    }
+    verified = verifyText.includes("is_valid:true");
   } catch {
-    // If verification fails due to network, proceed anyway ( degraded mode )
+    // Network error — reject the login
+    return NextResponse.redirect(new URL("/providers?error=steam_verification_failed", req.url));
+  }
+
+  if (!verified) {
+    return NextResponse.redirect(new URL("/providers?error=steam_verification_failed", req.url));
   }
 
   // Extract steamid from identity URL (format: https://steamcommunity.com/openid/id/76561198XXXXXXXX)
@@ -56,7 +59,7 @@ export async function GET(req: NextRequest) {
 
   const response = NextResponse.redirect(new URL("/providers?success=steam", req.url));
   response.cookies.set("provider_steam", JSON.stringify(STORE[steamId]), {
-    httpOnly: false,
+    httpOnly: true,
     path: "/",
     maxAge: 86400 * 30,
   });

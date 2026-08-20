@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
 
     const response = NextResponse.redirect(new URL("/providers?success=gog", req.url));
     response.cookies.set("provider_gog", JSON.stringify(STORE[userId]), {
-      httpOnly: false,
+      httpOnly: true,
       path: "/",
       maxAge: 86400 * 30,
     });
