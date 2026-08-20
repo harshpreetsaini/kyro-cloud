@@ -52,17 +52,19 @@ export default function ProvidersPage() {
 
   const fetchProviders = async () => {
     try {
-      const res = await fetch("/api/providers", { headers: { ...authHeader() } });
-      const data = await res.json();
-      if (data.ok && data.data) {
-        const enriched = data.data.map((p: Provider) => {
-          const cookieName = `provider_${p.id}`;
-          const cookieMatch = document.cookie.match(new RegExp(`(?:^|; )${cookieName}=([^;]*)`));
-          if (cookieMatch) {
-            try {
-              const session = JSON.parse(decodeURIComponent(cookieMatch[1]));
-              return { ...p, loggedIn: true, username: session.displayName || session.username || session.name || session.steamId || p.username };
-            } catch {}
+      const [providersRes, sessionRes] = await Promise.all([
+        fetch("/api/providers", { headers: { ...authHeader() } }),
+        fetch("/api/providers/session", { headers: { ...authHeader() } }),
+      ]);
+      const providersData = await providersRes.json();
+      const sessionData = await sessionRes.json();
+
+      if (providersData.ok && providersData.data) {
+        const sessions = sessionData.ok ? sessionData.data : {};
+        const enriched = providersData.data.map((p: Provider) => {
+          const session = sessions[p.id];
+          if (session?.loggedIn) {
+            return { ...p, loggedIn: true, username: session.username || p.username };
           }
           return { ...p, loggedIn: false };
         });
@@ -98,7 +100,13 @@ export default function ProvidersPage() {
   };
 
   const handleLogout = async (providerId: string) => {
-    document.cookie = `provider_${providerId}=; path=/; max-age=0`;
+    try {
+      await fetch("/api/providers/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ providerId }),
+      });
+    } catch {}
     fetchProviders();
   };
 
