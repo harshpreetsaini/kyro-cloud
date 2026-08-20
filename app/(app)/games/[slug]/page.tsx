@@ -59,8 +59,10 @@ export default function GameDetailsPage() {
     try {
       const res = await fetch(`/api/games/screenshots?appId=${appId}`);
       const data = await res.json();
-      if (data.screenshots && data.screenshots.length > 0) {
-        setRealScreenshots(data.screenshots.map((s: any) => s.path_full || s.path_thin_crop));
+      // API returns { ok: true, data: [...] } with url/thumbnail properties
+      const screenshots = data.data || data.screenshots;
+      if (screenshots && screenshots.length > 0) {
+        setRealScreenshots(screenshots.map((s: any) => s.url || s.path_full || s.thumbnail));
       }
     } catch {
       // Screenshots unavailable, will use hero/cover as fallback
@@ -163,7 +165,7 @@ export default function GameDetailsPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Hero */}
-      <section className="relative h-[350px] rounded-2xl overflow-hidden group">
+      <section className="relative h-[350px] rounded-2xl overflow-hidden group animate-fadeIn">
         {game.heroImage && !imgError ? (
           <img src={game.heroImage} alt="" className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
         ) : game.coverImage && !imgError ? (
@@ -275,10 +277,21 @@ export default function GameDetailsPage() {
                 <Button size="lg" variant="secondary" disabled>
                   {install.state === "checking" ? "Checking..." : install.state === "downloading" ? `Downloading... ${Math.round(install.percent)}%` : install.state === "installing" ? "Installing..." : "Processing..."}
                 </Button>
-              ) : (
-                <Button size="lg" onClick={handleInstall}>
-                  Download & Install
+              ) : game.isFree ? (
+                <Button size="lg" onClick={handleInstall} className="bg-green-600 hover:bg-green-700">
+                  Download Free
                 </Button>
+              ) : (
+                <>
+                  <Button size="lg" onClick={handleInstall}>
+                    Install
+                  </Button>
+                  <Link href="/providers" passHref>
+                    <Button size="lg" variant="secondary">
+                      Connect Account
+                    </Button>
+                  </Link>
+                </>
               )}
               {isRunning && (
                 <Button size="lg" variant="danger" onClick={() => { stopGame(game.id); setLaunchState("idle"); }}>
@@ -313,7 +326,7 @@ export default function GameDetailsPage() {
 
           {/* Screenshots */}
           {(loadingScreenshots || screenshotsToShow.length > 0) && (
-            <div className="mb-6">
+            <div className="mb-6 animate-fadeInUp" style={{ animationDelay: "0.2s" }}>
               <h2 className="text-lg font-semibold mb-3">Screenshots</h2>
               {loadingScreenshots ? (
                 <div className="grid grid-cols-2 gap-3">
@@ -322,9 +335,9 @@ export default function GameDetailsPage() {
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3 stagger-children">
                   {screenshotsToShow.slice(0, 4).map((url, i) => (
-                    <div key={i} className="aspect-video rounded-lg bg-secondary overflow-hidden">
+                    <div key={i} className="aspect-video rounded-lg bg-secondary overflow-hidden hover:scale-[1.02] transition-transform duration-300 cursor-pointer">
                       <img src={url} alt={`${game.name} screenshot ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
                     </div>
                   ))}
@@ -360,7 +373,7 @@ export default function GameDetailsPage() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-80 flex flex-col gap-4 shrink-0">
+        <div className="w-full lg:w-80 flex flex-col gap-4 shrink-0 animate-slideInRight">
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Game Information</h3>
             <div className="flex flex-col gap-2 text-sm">

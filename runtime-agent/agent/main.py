@@ -2,6 +2,7 @@ import os
 import json
 import time
 import threading
+import random
 
 import websocket  # websocket-client
 
@@ -10,13 +11,21 @@ import streaming
 import apps
 import webrtc_stream
 
+# ── Centralized backend URL (single source of truth) ──────────────────
 BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 TOKEN = os.environ.get("RUNTIME_AUTH_SECRET", "")
-RECONNECT = int(os.environ.get("LUNA_RECONNECT", "5"))
+RECONNECT_BASE = int(os.environ.get("LUNA_RECONNECT", "5"))
+RECONNECT_MAX = 60
+STATS_INTERVAL = 2
+PING_INTERVAL = 15
+
 _running = True
 _session_active = False
 _ws = None
-_terminal_procs = {}  # channel_id -> Popen
+_ws_gen = 0            # incremented on every on_open — invalidates stale threads
+_stats_stop = None     # threading.Event to signal stats_loop to exit
+_terminal_procs = {}   # channel_id -> Popen
+_agent_pids = []       # PIDs of processes we spawned (for cleanup)
 
 
 def url() -> str:
@@ -27,8 +36,10 @@ def url() -> str:
 def send(ws, type_: str, payload=None):
     try:
         ws.send(json.dumps({"type": type_, "payload": payload}))
-    except Exception:
-        pass
+    except websocket.WebSocketConnectionClosedException:
+        print(f"[agent] send failed: connection closed (type={type_})")
+    except Exception as e:
+        print(f"[agent] send error: {e} (type={type_})")
 
 
 def agent_send(type_: str, payload=None):
@@ -37,38 +48,86 @@ def agent_send(type_: str, payload=None):
         send(_ws, type_, payload)
 
 
-def stats_loop(ws):
-    while _running:
-        # Send telemetry whenever the backend is connected so the Control panel
-        # always reflects the real Colab hardware (CPU/GPU/RAM/Storage/network).
-        send(ws, "stats", collect_stats())
-        send(ws, "system_info", system_info())
-        time.sleep(2)
+# ── Stats loop (generation-safe) ──────────────────────────────────────
+def stats_loop(ws, gen):
+    """Send telemetry every STATS_INTERVAL seconds. Exits if generation changes."""
+    while _running and _ws_gen == gen:
+        try:
+            send(ws, "stats", collect_stats())
+            send(ws, "system_info", system_info())
+        except Exception as e:
+            print(f"[agent] stats error: {e}")
+        time.sleep(STATS_INTERVAL)
+    print(f"[agent] stats_loop gen={gen} exiting (current gen={_ws_gen})")
 
 
+def _start_stats(ws, gen):
+    """Start a new stats loop, stopping any previous one."""
+    global _stats_stop
+    if _stats_stop:
+        _stats_stop.set()
+    stop_event = threading.Event()
+    _stats_stop = stop_event
+    def _loop():
+        while _running and _ws_gen == gen and not stop_event.is_set():
+            try:
+                send(ws, "stats", collect_stats())
+                send(ws, "system_info", system_info())
+            except Exception as e:
+                print(f"[agent] stats error: {e}")
+            # Sleep in small chunks so we can respond to stop_event quickly
+            for _ in range(STATS_INTERVAL * 5):
+                if stop_event.is_set() or _ws_gen != gen:
+                    return
+                time.sleep(0.2)
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+# ── Keepalive ping (detects dead sockets proactively) ─────────────────
+def _keepalive_loop(ws, gen):
+    """Send pings every PING_INTERVAL seconds. If send fails, socket is dead."""
+    while _running and _ws_gen == gen:
+        time.sleep(PING_INTERVAL)
+        if _ws_gen != gen:
+            return
+        try:
+            ws.ping()
+        except Exception:
+            print("[agent] keepalive ping failed — connection may be dead")
+            return
+
+
+# ── Cleanup ────────────────────────────────────────────────────────────
 def _cleanup_stale():
-    """Kill leftover processes from a previous agent run (x11vnc, GStreamer,
-    zombie window managers, orphaned bash shells).  Best-effort — never raises."""
+    """Kill leftover processes from a previous agent run. Only kills our own PIDs."""
     import subprocess as _sp
     for pat in ("x11vnc", "gst-launch-1.0", "selkies-gstreamer"):
         try:
             _sp.run(["pkill", "-f", pat], timeout=5, capture_output=True)
         except Exception:
             pass
-    # Kill stale bash shells started by a previous agent (but not the current one).
-    try:
-        _sp.run(["pkill", "-f", "bash --login"], timeout=5, capture_output=True)
-    except Exception:
-        pass
+    # Kill only processes we tracked
+    for pid in _agent_pids:
+        try:
+            os.kill(pid, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+    _agent_pids.clear()
 
 
+# ── WebSocket handlers ─────────────────────────────────────────────────
 def on_open(ws):
-    global _ws
+    global _ws, _ws_gen, _session_active
     _ws = ws
+    _ws_gen += 1
+    _session_active = False  # reset on fresh connection
+    gen = _ws_gen
+    print(f"[agent] connected (gen={gen})")
     _cleanup_stale()
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
     send(ws, "app.list", apps.detect_apps())
-    threading.Thread(target=stats_loop, args=(ws,), daemon=True).start()
+    _start_stats(ws, gen)
+    threading.Thread(target=_keepalive_loop, args=(ws, gen), daemon=True).start()
 
 
 def on_message(ws, raw):
@@ -81,24 +140,12 @@ def on_message(ws, raw):
     p = msg.get("payload") or {}
     if t == "prepare_desktop":
         _session_active = True
-
         def _do_prepare():
             try:
                 ok = streaming.start_desktop(p.get("display", streaming.DISPLAY))
-                if ok:
-                    send(ws, "desktop_ready", {"ok": True})
-                else:
-                    send(
-                        ws,
-                        "desktop_ready",
-                        {
-                            "ok": False,
-                            "error": "Could not start Xvfb / window manager. Re-run the bootstrap notebook so xvfb, openbox/xfce4 and x11vnc get installed.",
-                        },
-                    )
+                send(ws, "desktop_ready", {"ok": ok, **({} if ok else {"error": "Could not start Xvfb / window manager."})})
             except Exception as ex:
                 send(ws, "desktop_ready", {"ok": False, "error": f"desktop start crashed: {ex}"})
-
         threading.Thread(target=_do_prepare, daemon=True).start()
     elif t == "start_stream":
         _session_active = True
@@ -106,17 +153,13 @@ def on_message(ws, raw):
             result = streaming.start_stream(p)
         except Exception as ex:
             result = {"ok": False, "error": f"start_stream crashed: {ex}"}
-        if result.get("error"):
-            send(ws, "error", result)
-        else:
-            send(ws, "stream_ready", result)
+        send(ws, "stream_ready" if not result.get("error") else "error", result)
     elif t == "start_vnc":
         _session_active = True
         try:
             result = streaming.start_vnc(p)
         except Exception as ex:
             result = {"ok": False, "error": f"start_vnc crashed: {ex}"}
-        # Always reply (with ok or a real error) so the backend never hangs waiting.
         send(ws, "vnc_ready", result)
     elif t == "start_gstreamer":
         _session_active = True
@@ -206,13 +249,8 @@ def on_message(ws, raw):
         send(ws, "pong", {})
 
 
+# ── Terminal / Files / Clipboard (unchanged) ───────────────────────────
 def _terminal_start(p):
-    """Start an interactive shell session on Colab for a terminal channel.
-
-    Uses a PTY so bash behaves as if attached to a real terminal (prompts,
-    line editing, job control).  Output is read from the master fd and
-    forwarded to the browser.
-    """
     channel_id = p.get("channelId", "default")
     cwd = p.get("cwd", "/root")
     import subprocess as _sp
@@ -223,21 +261,17 @@ def _terminal_start(p):
         master_fd, slave_fd = pty.openpty()
         proc = _sp.Popen(
             [os.environ.get("SHELL", "/bin/bash"), "--login"],
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
             cwd=cwd,
             env=dict(os.environ, TERM="xterm-256color", SHELL="/bin/bash"),
             close_fds=True,
         )
+        _agent_pids.append(proc.pid)
         os.close(slave_fd)
-        # Set master_fd non-blocking so reads don't hang the thread.
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         _terminal_procs[channel_id] = {"proc": proc, "fd": master_fd}
-
         def _read_pty():
-            """Read from the PTY master and forward to the browser."""
             try:
                 while proc.poll() is None:
                     try:
@@ -245,17 +279,13 @@ def _terminal_start(p):
                         if r:
                             data = os.read(master_fd, 8192)
                             if data:
-                                agent_send("terminal.output", {
-                                    "channelId": channel_id,
-                                    "stdout": data.decode(errors="replace"),
-                                })
+                                agent_send("terminal.output", {"channelId": channel_id, "stdout": data.decode(errors="replace")})
                             else:
                                 break
                     except (OSError, ValueError):
                         break
             except Exception:
                 pass
-
         threading.Thread(target=_read_pty, daemon=True).start()
         agent_send("terminal.started", {"channelId": channel_id, "ok": True})
     except Exception as e:
@@ -263,7 +293,6 @@ def _terminal_start(p):
 
 
 def _terminal_input(p):
-    """Write input to a running terminal channel on Colab."""
     channel_id = p.get("channelId", "default")
     data = p.get("data", "")
     rec = _terminal_procs.get(channel_id)
@@ -283,7 +312,6 @@ def _terminal_input(p):
 
 
 def _terminal_stop(p):
-    """Stop a running terminal channel on Colab."""
     channel_id = p.get("channelId", "default")
     rec = _terminal_procs.pop(channel_id, None)
     if not rec:
@@ -303,33 +331,22 @@ def _terminal_stop(p):
 
 
 def _files_list(p):
-    """List directory contents on Colab."""
     import pathlib
     rid = p.get("requestId", "")
-    dirpath = p.get("path", "/")
     try:
-        base = pathlib.Path(dirpath)
         items = []
-        for entry in sorted(base.iterdir()):
+        for entry in sorted(pathlib.Path(p.get("path", "/")).iterdir()):
             stat = entry.stat(follow_symlinks=False)
-            items.append({
-                "name": entry.name,
-                "path": str(entry),
-                "type": "directory" if entry.is_dir() else "file",
-                "sizeBytes": stat.st_size if entry.is_file() else None,
-                "modified": stat.st_mtime,
-            })
+            items.append({"name": entry.name, "path": str(entry), "type": "directory" if entry.is_dir() else "file", "sizeBytes": stat.st_size if entry.is_file() else None, "modified": stat.st_mtime})
         agent_send("files.result", {"requestId": rid, "ok": True, "items": items})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
 
 
 def _files_read(p):
-    """Read a file from Colab."""
     rid = p.get("requestId", "")
-    fpath = p.get("path", "")
     try:
-        with open(fpath, "rb") as f:
+        with open(p.get("path", ""), "rb") as f:
             data = f.read()
         agent_send("files.result", {"requestId": rid, "ok": True, "data": list(data)})
     except Exception as e:
@@ -337,20 +354,16 @@ def _files_read(p):
 
 
 def _files_write(p):
-    """Write a file to Colab."""
     rid = p.get("requestId", "")
-    fpath = p.get("path", "")
-    content = p.get("content", [])
     try:
-        with open(fpath, "wb") as f:
-            f.write(bytes(content))
+        with open(p.get("path", ""), "wb") as f:
+            f.write(bytes(p.get("content", [])))
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
 
 
 def _files_mkdir(p):
-    """Create a directory on Colab."""
     import pathlib
     rid = p.get("requestId", "")
     try:
@@ -361,20 +374,17 @@ def _files_mkdir(p):
 
 
 def _files_rename(p):
-    """Rename a file/directory on Colab."""
     rid = p.get("requestId", "")
     try:
         import pathlib
         src = pathlib.Path(p.get("path", ""))
-        dst = src.parent / p.get("newName", "")
-        src.rename(dst)
+        src.rename(src.parent / p.get("newName", ""))
         agent_send("files.result", {"requestId": rid, "ok": True})
     except Exception as e:
         agent_send("files.result", {"requestId": rid, "ok": False, "error": str(e)})
 
 
 def _files_delete(p):
-    """Delete a file or directory on Colab."""
     import pathlib, shutil
     rid = p.get("requestId", "")
     target = pathlib.Path(p.get("path", ""))
@@ -389,193 +399,121 @@ def _files_delete(p):
 
 
 def _clipboard_get(p):
-    """Get clipboard content from X11 display on Colab."""
     import subprocess
     rid = p.get("requestId", "")
-    try:
-        display = os.environ.get("DISPLAY", ":1")
-        # Try xclip first
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard", "-o"],
-            capture_output=True, text=True, timeout=5,
-            env={**os.environ, "DISPLAY": display},
-        )
-        if result.returncode == 0:
-            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": result.stdout})
-        else:
-            # xclip might fail if no selection; return empty
-            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": ""})
-    except FileNotFoundError:
-        # xclip not installed, try xsel
+    display = os.environ.get("DISPLAY", ":1")
+    for cmd in (["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]):
         try:
-            result = subprocess.run(
-                ["xsel", "--clipboard", "--output"],
-                capture_output=True, text=True, timeout=5,
-                env={**os.environ, "DISPLAY": display},
-            )
-            agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": result.stdout})
-        except Exception as e:
-            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
-    except Exception as e:
-        agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env={**os.environ, "DISPLAY": display})
+            if result.returncode == 0:
+                agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": result.stdout})
+                return
+        except FileNotFoundError:
+            continue
+        except Exception:
+            break
+    agent_send("clipboard.result", {"requestId": rid, "ok": True, "text": ""})
 
 
 def _clipboard_set(p):
-    """Set clipboard content on X11 display on Colab."""
     import subprocess
     rid = p.get("requestId", "")
     text = p.get("text", "")
-    try:
-        display = os.environ.get("DISPLAY", ":1")
-        # Try xclip first
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard"],
-            input=text, capture_output=True, text=True, timeout=5,
-            env={**os.environ, "DISPLAY": display},
-        )
-        if result.returncode == 0:
-            agent_send("clipboard.result", {"requestId": rid, "ok": True})
-        else:
-            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": result.stderr})
-    except FileNotFoundError:
-        # xclip not installed, try xsel
+    display = os.environ.get("DISPLAY", ":1")
+    for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
         try:
-            result = subprocess.run(
-                ["xsel", "--clipboard", "--input"],
-                input=text, capture_output=True, text=True, timeout=5,
-                env={**os.environ, "DISPLAY": display},
-            )
-            agent_send("clipboard.result", {"requestId": rid, "ok": True})
-        except Exception as e:
-            agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
-    except Exception as e:
-        agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": str(e)})
+            result = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=5, env={**os.environ, "DISPLAY": display})
+            if result.returncode == 0:
+                agent_send("clipboard.result", {"requestId": rid, "ok": True})
+                return
+        except FileNotFoundError:
+            continue
+        except Exception:
+            break
+    agent_send("clipboard.result", {"requestId": rid, "ok": False, "error": "no clipboard tool available"})
 
 
+# ── Provider handlers ──────────────────────────────────────────────────
 def _provider_login(ws, p):
-    """Handle provider login (steamcmd, legendary, etc)."""
     import subprocess
     provider = p.get("provider", "steam")
     username = p.get("username", "")
     password = p.get("password", "")
-
     def _do_login():
         try:
             if provider == "steam":
-                subprocess.run(["which", "steamcmd"], capture_output=True)
-                result = subprocess.run(
-                    ["steamcmd", "+login", username, password, "+quit"],
-                    capture_output=True, text=True, timeout=120,
-                )
+                result = subprocess.run(["steamcmd", "+login", username, password, "+quit"], capture_output=True, text=True, timeout=120)
                 ok = "Steam account successfully logged in" in result.stdout or result.returncode == 0
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else result.stdout[-500:]})
             elif provider == "epic":
-                subprocess.run(["pip", "install", "legendary-gl"], capture_output=True)
-                result = subprocess.run(
-                    ["legendary", "auth", "--code", username],
-                    capture_output=True, text=True, timeout=60,
-                )
-                ok = result.returncode == 0
-                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None})
+                subprocess.run(["pip", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
+                result = subprocess.run(["legendary", "auth", "--code", username], capture_output=True, text=True, timeout=60)
+                send(ws, "provider.login.result", {"provider": provider, "ok": result.returncode == 0, "username": username if result.returncode == 0 else None})
             elif provider == "gog":
-                subprocess.run(["pip", "install", "lgogdownloader"], capture_output=True)
-                result = subprocess.run(
-                    ["lgogdownloader", "--login"],
-                    input=f"{username}\n{password}\n", capture_output=True, text=True, timeout=60,
-                )
-                ok = result.returncode == 0
-                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None})
+                subprocess.run(["pip", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
+                result = subprocess.run(["lgogdownloader", "--login"], input=f"{username}\n{password}\n", capture_output=True, text=True, timeout=60)
+                send(ws, "provider.login.result", {"provider": provider, "ok": result.returncode == 0, "username": username if result.returncode == 0 else None})
             else:
-                send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Provider {provider} not yet supported. Use the desktop client."})
+                send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Provider {provider} not supported."})
         except Exception as ex:
             send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": str(ex)})
     threading.Thread(target=_do_login, daemon=True).start()
 
 
 def _provider_sync(ws, p):
-    """Sync game library from a connected provider."""
     import subprocess
-    import configparser
     provider = p.get("provider", "steam")
     steam_id = p.get("steamId")
     access_token = p.get("accessToken")
     username = p.get("username")
-
-    # Read auth code from file if available
-    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
     auth_code = ""
+    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
     if os.path.exists(auth_file):
         try:
             with open(auth_file) as f:
                 auth_code = f.read().strip()
         except Exception:
             pass
-
     def _do_sync():
         try:
             games = []
             if provider == "steam":
-                # Try with auth code first (user's Steam ID for owned games)
                 login_user = steam_id or auth_code or "anonymous"
-                result = subprocess.run(
-                    ["steamcmd", "+login", login_user, "+apps_list", "+quit"],
-                    capture_output=True, text=True, timeout=120,
-                )
+                result = subprocess.run(["steamcmd", "+login", login_user, "+apps_list", "+quit"], capture_output=True, text=True, timeout=120)
                 for line in result.stdout.split("\n"):
                     line = line.strip()
                     if line and line[0].isdigit() and "\t" in line:
                         parts = line.split("\t", 1)
                         if len(parts) == 2:
                             games.append({"appId": parts[0], "name": parts[1]})
-
-                # If we have a steam_id, try Steam Web API for owned games
                 if (steam_id or auth_code) and not games:
                     sid = steam_id or auth_code
                     try:
                         import urllib.request
-                        url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={sid}&include_appinfo=1&format=json"
+                        api_key = os.environ.get("STEAM_API_KEY", "")
+                        if api_key:
+                            url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key={api_key}&steamid={sid}&include_appinfo=1&format=json"
+                        else:
+                            url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={sid}&include_appinfo=1&format=json"
                         with urllib.request.urlopen(url, timeout=15) as resp:
                             data = json.loads(resp.read())
                             for g in data.get("response", {}).get("games", []):
                                 games.append({"appId": str(g.get("appid", "")), "name": g.get("name", "")})
                     except Exception:
                         pass
-
-                # If still no games, try anonymous (free games)
                 if not games:
-                    result = subprocess.run(
-                        ["steamcmd", "+login", "anonymous", "+apps_list", "+quit"],
-                        capture_output=True, text=True, timeout=120,
-                    )
+                    result = subprocess.run(["steamcmd", "+login", "anonymous", "+apps_list", "+quit"], capture_output=True, text=True, timeout=120)
                     for line in result.stdout.split("\n"):
                         line = line.strip()
                         if line and line[0].isdigit() and "\t" in line:
                             parts = line.split("\t", 1)
                             if len(parts) == 2:
                                 games.append({"appId": parts[0], "name": parts[1]})
-
             elif provider == "epic":
-                # Install legendary if not present
                 subprocess.run(["pip3", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
-
-                # Try to authenticate with auth code
                 if auth_code:
-                    result = subprocess.run(
-                        ["legendary", "auth", "--code", auth_code],
-                        capture_output=True, text=True, timeout=60,
-                    )
-                    # If code doesn't work, try as token
-                    if result.returncode != 0 and len(auth_code) > 100:
-                        result = subprocess.run(
-                            ["legendary", "auth", "--token", auth_code],
-                            capture_output=True, text=True, timeout=60,
-                        )
-
-                # List games
-                result = subprocess.run(
-                    ["legendary", "list-games", "--csv", "--tsv"],
-                    capture_output=True, text=True, timeout=60,
-                )
+                    subprocess.run(["legendary", "auth", "--code", auth_code], capture_output=True, text=True, timeout=60)
+                result = subprocess.run(["legendary", "list-games", "--csv", "--tsv"], capture_output=True, text=True, timeout=60)
                 for line in result.stdout.strip().split("\n"):
                     if line.startswith("App name") or not line.strip():
                         continue
@@ -585,37 +523,12 @@ def _provider_sync(ws, p):
                         name = parts[1].strip().strip('"')
                         if app_id and name:
                             games.append({"appId": app_id, "name": name})
-
-                # If legendary not installed or failed, check if it's available
                 if not games and result.returncode != 0:
-                    send(ws, "provider.library", {
-                        "provider": provider,
-                        "games": [],
-                        "count": 0,
-                        "error": f"legendary not available. Run 'legendary auth' on your Colab runtime to authenticate.",
-                        "instructions": "Run: pip install legendary-gl && legendary auth"
-                    })
+                    send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": "legendary not available. Run 'legendary auth' on Colab."})
                     return
-
             elif provider == "gog":
-                # Install lgogdownloader if not present
                 subprocess.run(["pip3", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
-
-                # Try to authenticate with auth code
-                if auth_code:
-                    # lgogdownloader uses a config file for auth
-                    gog_config_dir = os.path.expanduser("~/.config/lgogdownloader")
-                    os.makedirs(gog_config_dir, exist_ok=True)
-                    # Write the auth code to a temp file for lgogdownloader
-                    auth_tmp = os.path.join(gog_config_dir, "auth_code.txt")
-                    with open(auth_tmp, "w") as f:
-                        f.write(auth_code)
-
-                # List games
-                result = subprocess.run(
-                    ["lgogdownloader", "--list", "--csv"],
-                    capture_output=True, text=True, timeout=60,
-                )
+                result = subprocess.run(["lgogdownloader", "--list", "--csv"], capture_output=True, text=True, timeout=60)
                 for line in result.stdout.strip().split("\n"):
                     parts = line.split(";")
                     if len(parts) >= 2:
@@ -623,18 +536,9 @@ def _provider_sync(ws, p):
                         name = parts[1].strip()
                         if app_id and name and app_id.isdigit():
                             games.append({"appId": app_id, "name": name})
-
-                # If lgogdownloader not available
                 if not games and result.returncode != 0:
-                    send(ws, "provider.library", {
-                        "provider": provider,
-                        "games": [],
-                        "count": 0,
-                        "error": f"lgogdownloader not available. Run 'lgogdownloader --login' on your Colab runtime to authenticate.",
-                        "instructions": "Run: pip install lgogdownloader && lgogdownloader --login"
-                    })
+                    send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": "lgogdownloader not available. Run 'lgogdownloader --login' on Colab."})
                     return
-
             send(ws, "provider.library", {"provider": provider, "games": games, "count": len(games)})
         except Exception as ex:
             send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": str(ex)})
@@ -642,55 +546,38 @@ def _provider_sync(ws, p):
 
 
 def _provider_logout(ws, p):
-    """Logout from a provider."""
-    provider = p.get("provider", "steam")
-    send(ws, "provider.logout.result", {"provider": provider, "ok": True})
+    send(ws, "provider.logout.result", {"provider": p.get("provider", "steam"), "ok": True})
 
 
+# ── Game install ───────────────────────────────────────────────────────
 def _game_install(ws, p):
-    """Install a game via the appropriate package manager."""
-    import subprocess
-    import re
+    import subprocess, re
     game_id = p.get("id", "")
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
     install_dir = p.get("installDir", "/root/games")
-
-    # Read auth code from file
     auth_code = ""
-    for provider in ["steam", "epic", "gog"]:
-        auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
+    for prov in ["steam", "epic", "gog"]:
+        auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{prov}_auth.txt")
         if os.path.exists(auth_file):
             try:
                 with open(auth_file) as f:
                     auth_code = f.read().strip()
             except Exception:
                 pass
-
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
-        send(ws, "game.install.progress", {
-            "gameId": game_id, "state": state,
-            "percent": round(percent, 1), "downloadedBytes": downloaded,
-            "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta,
-        })
-
+        send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
         try:
             os.makedirs(install_dir, exist_ok=True)
             _send_progress("checking", 0)
-
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
-                # Use auth code (Steam ID) if available, otherwise anonymous
                 login_user = auth_code if auth_code else "anonymous"
-                cmd = ["steamcmd", "+login", login_user,
-                       f"+app_update {app_id} validate", "+quit"]
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
-                percent = 0
-                total_bytes = 0
-                speed_bps = 0
+                cmd = ["steamcmd", "+login", login_user, f"+app_update {app_id} validate", "+quit"]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _agent_pids.append(proc.pid)
+                percent = total_bytes = speed_bps = 0
                 for line in proc.stdout:
                     lo = line.lower().strip()
                     dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
@@ -717,16 +604,12 @@ def _game_install(ws, p):
                     if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
                         percent = min(percent + 2, 95)
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-
                 proc.wait()
                 ok = proc.returncode == 0
-
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
-                cmd = ["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"]
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
+                proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
                     lo = line.lower().strip()
@@ -734,20 +617,15 @@ def _game_install(ws, p):
                     if prog_match:
                         percent = float(prog_match.group(1))
                         _send_progress("downloading", percent)
-                        continue
-                    if any(k in lo for k in ("downloading", "installing", "extracting")):
+                    elif any(k in lo for k in ("downloading", "installing", "extracting")):
                         percent = min(percent + 1, 95)
                         _send_progress("downloading", percent)
-
                 proc.wait()
                 ok = proc.returncode == 0
-
             elif install_method == "lgogdownloader" and app_id:
                 _send_progress("downloading", 0)
-                cmd = ["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir]
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
+                proc = subprocess.Popen(["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
                     lo = line.lower().strip()
@@ -755,39 +633,26 @@ def _game_install(ws, p):
                     if prog_match:
                         percent = float(prog_match.group(1))
                         _send_progress("downloading", percent)
-                        continue
-                    if any(k in lo for k in ("downloading", "installing")):
+                    elif any(k in lo for k in ("downloading", "installing")):
                         percent = min(percent + 1, 95)
                         _send_progress("downloading", percent)
-
                 proc.wait()
                 ok = proc.returncode == 0
-
             else:
-                send(ws, "game.install.done", {
-                    "gameId": game_id, "success": False,
-                    "error": f"Install method '{install_method}' not available. Connect your gaming account first.",
-                })
+                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": f"Install method '{install_method}' not available."})
                 return
-
             if ok:
                 _send_progress("ready", 100)
                 send(ws, "game.install.done", {"gameId": game_id, "success": True})
             else:
-                send(ws, "game.install.done", {
-                    "gameId": game_id, "success": False,
-                    "error": "Installation failed — check the terminal for details",
-                })
+                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Installation failed"})
         except Exception as ex:
             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": str(ex)})
-
     threading.Thread(target=_do_install, daemon=True).start()
 
 
 def _game_uninstall(ws, p):
-    """Uninstall a game."""
-    game_id = p.get("id", "")
-    send(ws, "game.install.done", {"gameId": game_id, "success": True})
+    send(ws, "game.install.done", {"gameId": p.get("id", ""), "success": True})
 
 
 def on_error(ws, err):
@@ -798,10 +663,10 @@ def on_close(ws, *args):
     print("[agent] disconnected")
 
 
+# ── Main loop with exponential backoff ─────────────────────────────────
 def main():
-    print(
-        f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING (using default)'}"
-    )
+    print(f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING'}")
+    attempt = 0
     while _running:
         try:
             ws = websocket.WebSocketApp(
@@ -811,10 +676,22 @@ def main():
                 on_error=on_error,
                 on_close=on_close,
             )
-            ws.run_forever(reconnect=RECONNECT)
+            # Enable TCP_NODELAY for zero-latency control messages
+            ws.run_forever(
+                ping_interval=0,
+                suppress_origin=True,
+                socket={"no_delay": True},
+            )
+            attempt = 0  # reset on clean disconnect
         except Exception as e:
             print(f"[agent] connection failed: {e}")
-        time.sleep(RECONNECT)
+        # Exponential backoff with jitter
+        delay = min(RECONNECT_BASE * (2 ** attempt), RECONNECT_MAX)
+        jitter = random.uniform(0, delay * 0.3)
+        sleep_time = delay + jitter
+        print(f"[agent] reconnecting in {sleep_time:.1f}s (attempt {attempt + 1})")
+        time.sleep(sleep_time)
+        attempt = min(attempt + 1, 10)
 
 
 if __name__ == "__main__":

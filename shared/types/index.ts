@@ -122,6 +122,8 @@ export interface GameEntry {
   availability: GameAvailability;
   installed: boolean;
   favorite?: boolean;
+  isFree?: boolean;
+  price?: string;
   lastPlayedAt?: string | null;
   playTime?: number;
   running?: boolean;

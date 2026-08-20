@@ -82,9 +82,16 @@ export function GameCard({
           )}
 
           {/* Rating badge — top right */}
-          {typeof game.rating === "number" && !isNaN(game.rating) && (
+          {typeof game.rating === "number" && !isNaN(game.rating) && !game.isFree && (
             <span className="absolute top-1.5 right-1.5 text-[10px] text-yellow-400 bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm font-medium flex items-center gap-0.5">
               ★ {game.rating.toFixed(1)}
+            </span>
+          )}
+
+          {/* Free badge — top right (when no rating) */}
+          {game.isFree && !game.installed && (
+            <span className="absolute top-1.5 right-1.5 text-[9px] text-green-400 bg-green-500/20 px-1.5 py-0.5 rounded backdrop-blur-sm font-bold uppercase">
+              Free
             </span>
           )}
 
@@ -157,8 +164,10 @@ export function GameCard({
               <span className="text-[9px] text-success font-medium">● Running</span>
             ) : game.installed ? (
               <span className="text-[9px] text-success">● Installed</span>
+            ) : game.isFree ? (
+              <span className="text-[9px] text-green-400 font-medium">Free</span>
             ) : (
-              <span className="text-[9px] text-muted">Free / Buy</span>
+              <span className="text-[9px] text-muted">{game.downloadSize || "Buy"}</span>
             )}
           </div>
         </div>

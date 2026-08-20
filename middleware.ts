@@ -5,7 +5,9 @@ const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/games/sc
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
-  if (/^\/api\/providers\/[^/]+\/(login|logout)$/.test(pathname)) return true;
+  if (/^\/api\/providers\/[^/]+\/(login|logout|callback)$/.test(pathname)) return true;
+  // Specific callback paths for OAuth providers
+  if (/^\/api\/providers\/(steam|epic|gog)\/callback$/.test(pathname)) return true;
   return false;
 }
 

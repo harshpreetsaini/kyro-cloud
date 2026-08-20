@@ -21,9 +21,12 @@ export function WebRTCViewer({ signalingUrl, room, iceServers, className = "" }:
   useEffect(() => {
     let cancelled = false;
     const ice = iceServers && iceServers.length ? iceServers : [{ urls: "stun:stun.l.google.com:19302" }];
-    const pc = new RTCPeerConnection({ iceServers: ice });
+    const pc = new RTCPeerConnection({
+      iceServers: ice,
+      bundlePolicy: "max-bundle",
+    });
     pcRef.current = pc;
-    const dc = pc.createDataChannel("input");
+    const dc = pc.createDataChannel("input", { ordered: false, maxRetransmits: 0 });
     dcRef.current = dc;
 
     const ws = new WebSocket(wsUrl(`${signalingUrl}?room=${encodeURIComponent(room)}&role=client`));

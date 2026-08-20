@@ -14,7 +14,7 @@ interface Provider {
   loggedIn: boolean;
   username?: string;
   gameCount?: number;
-  method: "auth_code" | "coming";
+  method: "oauth" | "coming";
   installMethod: string;
 }
 
@@ -35,19 +35,15 @@ export default function ProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [authModal, setAuthModal] = useState<string | null>(null);
-  const [authCode, setAuthCode] = useState("");
-  const [authInstructions, setAuthInstructions] = useState<{ title: string; steps: string[]; note?: string } | null>(null);
-  const [authSaving, setAuthSaving] = useState(false);
-  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [loginSuccess, setLoginSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const success = params.get("success");
     const error = params.get("error");
     if (success) {
-      setAuthSuccess(success);
-      setTimeout(() => setAuthSuccess(null), 3000);
+      setLoginSuccess(success);
+      setTimeout(() => setLoginSuccess(null), 5000);
     }
     if (error) setLoginError(`Authentication failed: ${error}`);
     if (success || error) window.history.replaceState({}, "", "/providers");
@@ -72,61 +68,19 @@ export default function ProvidersPage() {
         });
         setProviders(enriched);
       } else {
-        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "auth_code", installMethod: "steamcmd" })));
+        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "oauth", installMethod: "steamcmd" })));
       }
     } catch {
-      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "auth_code", installMethod: "steamcmd" })));
+      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "oauth", installMethod: "steamcmd" })));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLogin = async (providerId: string) => {
+  const handleOAuthLogin = (providerId: string) => {
     setLoginError(null);
-    setAuthCode("");
-    try {
-      const res = await fetch(`/api/providers/${providerId}/login`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...authHeader() },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (data.ok && data.data) {
-        if (data.data.instructions) {
-          setAuthInstructions(data.data.instructions);
-        }
-        setAuthModal(providerId);
-      }
-    } catch {
-      setLoginError("Connection failed");
-    }
-  };
-
-  const handleSubmitAuthCode = async () => {
-    if (!authModal || !authCode.trim()) return;
-    setAuthSaving(true);
-    try {
-      const res = await fetch(`/api/providers/${authModal}/login`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...authHeader() },
-        body: JSON.stringify({ authCode: authCode.trim() }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        // Save session cookie
-        const sessionData = { displayName: authCode.trim(), connectedAt: new Date().toISOString() };
-        document.cookie = `provider_${authModal}=${encodeURIComponent(JSON.stringify(sessionData))}; path=/; max-age=${86400 * 30}`;
-        setAuthModal(null);
-        setAuthSuccess(authModal);
-        fetchProviders();
-      } else {
-        setLoginError(data.error || "Failed to save auth code");
-      }
-    } catch {
-      setLoginError("Failed to save auth code");
-    } finally {
-      setAuthSaving(false);
-    }
+    // Redirect to provider's OAuth page via our API route
+    window.location.href = `/api/providers/${providerId}/login`;
   };
 
   const handleSyncLibrary = async (providerId: string) => {
@@ -180,9 +134,9 @@ export default function ProvidersPage() {
         </div>
       )}
 
-      {authSuccess && (
+      {loginSuccess && (
         <div className="panel p-4 border border-green-500/20 bg-green-500/5">
-          <p className="text-sm text-green-400">✓ {authSuccess} connected successfully</p>
+          <p className="text-sm text-green-400">✓ {loginSuccess} connected successfully</p>
         </div>
       )}
 
@@ -212,7 +166,7 @@ export default function ProvidersPage() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted">Account</span>
-                  <span className="truncate max-w-[120px]">{provider.username}</span>
+                  <span className="truncate max-w-[140px]">{provider.username}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted">Games Owned</span>
@@ -232,7 +186,7 @@ export default function ProvidersPage() {
                 Coming Soon
               </Button>
             ) : (
-              <Button size="sm" className="w-full" onClick={() => handleLogin(provider.id)}>
+              <Button size="sm" className="w-full" onClick={() => handleOAuthLogin(provider.id)}>
                 Login with {provider.name}
               </Button>
             )}
@@ -240,68 +194,21 @@ export default function ProvidersPage() {
         ))}
       </div>
 
-      {/* Auth Code Modal */}
-      {authModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="panel p-6 w-full max-w-lg mx-4 flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-lg">{authInstructions?.title || `Login to ${authModal}`}</h3>
-              <button onClick={() => setAuthModal(null)} className="text-muted hover:text-white text-lg">✕</button>
-            </div>
-
-            {authInstructions?.steps && (
-              <div className="text-sm text-muted space-y-2">
-                {authInstructions.steps.map((step, i) => (
-                  <div key={i} className="flex gap-2">
-                    <span className="text-accent font-mono">{i + 1}.</span>
-                    <span>{step}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {authInstructions?.note && (
-              <p className="text-xs text-muted/70 italic">{authInstructions.note}</p>
-            )}
-
-            <div>
-              <label className="text-sm text-muted mb-1 block">Paste your auth code / Steam ID:</label>
-              <input
-                type="text"
-                value={authCode}
-                onChange={(e) => setAuthCode(e.target.value)}
-                placeholder={authModal === "steam" ? "76561198012345678" : "Paste auth code here"}
-                className="w-full bg-muted/10 border border-muted/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent"
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" className="flex-1" onClick={() => setAuthModal(null)}>
-                Cancel
-              </Button>
-              <Button size="sm" className="flex-1" onClick={handleSubmitAuthCode} disabled={!authCode.trim() || authSaving}>
-                {authSaving ? "Saving..." : "Connect"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* How it works */}
       <div className="panel p-5">
         <h3 className="font-semibold mb-3">How Provider Login Works</h3>
         <div className="grid sm:grid-cols-3 gap-4 text-sm text-muted">
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">01</span>
-            <p>Click Login and follow the instructions to get your auth code from the provider</p>
+            <p>Click Login and sign in through the official provider page (Steam, Epic, GOG)</p>
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">02</span>
-            <p>Paste the auth code and click Connect — your session is saved</p>
+            <p>Sync your library — owned games appear in your Library tab</p>
           </div>
           <div className="flex flex-col gap-2">
             <span className="text-accent font-mono">03</span>
-            <p>Click Sync Library to fetch your games — then install from the Library tab</p>
+            <p>Click Install on any owned game — it downloads to your cloud PC</p>
           </div>
         </div>
       </div>

@@ -130,7 +130,6 @@ export function GStreamerViewer({
 
         if (marker === 0x00) {
           // Video frame (H.264) with 4-byte timestamp prefix
-          // Extract timestamp from bytes 1-4
           const timestampBytes = rawData.slice(1, 5);
           const serverTimestamp = (timestampBytes[0] << 24) |
                                   (timestampBytes[1] << 16) |
@@ -140,8 +139,8 @@ export function GStreamerViewer({
           // Calculate latency (server timestamp vs local time)
           const now = Date.now() % 0xFFFFFFFF;
           let latMs = now - serverTimestamp;
-          if (latMs < 0) latMs += 0xFFFFFFFF; // Handle wraparound
-          if (latMs < 1000) { // Sanity check: ignore if > 1 second
+          if (latMs < 0) latMs += 0xFFFFFFFF;
+          if (latMs < 1000) {
             latencySumRef.current += latMs;
             latencyCountRef.current++;
           }
@@ -160,10 +159,18 @@ export function GStreamerViewer({
               setError(`Configure failed: ${e.message}`);
             }
           }
+
+          // Detect keyframe by NAL unit type (0x65 = IDR, 0x41 = non-IDR, 0x67 = SPS, 0x68 = PPS)
+          const isKeyframe = payload.length > 0 && (
+            payload[0] === 0x65 || payload[0] === 0x41 ||
+            payload[0] === 0x67 || payload[0] === 0x68 ||
+            (payload.length > 4 && payload[0] === 0x00 && payload[1] === 0x00 && payload[2] === 0x00 && payload[3] === 0x01)
+          );
+
           try {
             decoder.decode(
               new EncodedVideoChunk({
-                type: "delta",
+                type: isKeyframe ? "key" : "delta",
                 timestamp: performance.now() * 1000,
                 data: payload,
               })

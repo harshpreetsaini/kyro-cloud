@@ -107,7 +107,9 @@ function connect() {
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (started) {
       retry += 1;
-      setTimeout(connect, Math.min(1000 * retry, 5000));
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s cap
+      const delay = Math.min(1000 * Math.pow(2, retry - 1), 30000);
+      setTimeout(connect, delay);
     }
   };
   ws.onmessage = (ev) => {

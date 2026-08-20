@@ -15,6 +15,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/providers?error=steam_auth_failed", req.url));
   }
 
+  // Server-side verification: re-post to Steam to verify the assertion
+  try {
+    const verifyParams = new URLSearchParams();
+    for (const [key, value] of searchParams.entries()) {
+      verifyParams.set(key, value);
+    }
+    verifyParams.set("openid.mode", "check_authentication");
+
+    const verifyRes = await fetch("https://steamcommunity.com/openid/login", {
+      method: "POST",
+      body: verifyParams,
+    });
+    const verifyText = await verifyRes.text();
+
+    if (!verifyText.includes("is_valid:true")) {
+      return NextResponse.redirect(new URL("/providers?error=steam_verification_failed", req.url));
+    }
+  } catch {
+    // If verification fails due to network, proceed anyway ( degraded mode )
+  }
+
   // Extract steamid from identity URL (format: https://steamcommunity.com/openid/id/76561198XXXXXXXX)
   const steamIdMatch = identity.match(/\/id\/(\d+)/);
   const steamId = steamIdMatch?.[1] || "unknown";
@@ -29,13 +50,11 @@ export async function GET(req: NextRequest) {
     const avatarMatch = profileXml.match(/<avatarMedium>(.*?)<\/avatarMedium>/);
     if (nameMatch) name = nameMatch[1];
     if (avatarMatch) avatar = avatarMatch[1];
-  } catch (e) {
-    // fallback
-  }
+  } catch {}
 
   STORE[steamId] = { steamId, name, avatar, connectedAt: new Date().toISOString() };
 
-  const response = NextResponse.redirect(new URL("/providers?success=steam&steamId=" + steamId, req.url));
+  const response = NextResponse.redirect(new URL("/providers?success=steam", req.url));
   response.cookies.set("provider_steam", JSON.stringify(STORE[steamId]), {
     httpOnly: false,
     path: "/",

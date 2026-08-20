@@ -18,8 +18,11 @@ _gstreamer_fps = 0
 _gstreamer_frame_count = 0
 _gstreamer_last_fps_time = 0
 _current_quality = None
-BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent")
-RUNTIME_AUTH_SECRET = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+
+# ── Centralized backend URL (imported from main.py at runtime) ──────────
+BACKEND_WS = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
+RUNTIME_AUTH_SECRET = os.environ.get("RUNTIME_AUTH_SECRET", "")
+_tunnel_stop = threading.Event()  # signals tunnel threads to exit
 
 # Quality presets: maps (resolution, quality) -> (width, height, bitrate_kbps, key_int_fps_mult)
 QUALITY_PRESETS = {
@@ -234,7 +237,13 @@ def start_vnc(payload=None) -> dict:
         token = RUNTIME_AUTH_SECRET
         ws_url = "%s?token=%s" % (backend, token)
         try:
-            VNC_TUNNEL = websocket.create_connection(ws_url, timeout=15)
+            VNC_TUNNEL = websocket.create_connection(
+                ws_url, timeout=15,
+                suppress_origin=True,
+            )
+            # Enable TCP_NODELAY for zero-latency video forwarding
+            if hasattr(VNC_TUNNEL, 'sock') and VNC_TUNNEL.sock:
+                VNC_TUNNEL.sock.setsockopt(__import__('socket').IPPROTO_TCP, __import__('socket').TCP_NODELAY, 1)
         except Exception as e:
             return {"ok": False, "error": "VNC tunnel connect failed: %s" % e}
     except Exception as e:
@@ -242,28 +251,59 @@ def start_vnc(payload=None) -> dict:
 
     # Pump VNC TCP (127.0.0.1:5901) <-> tunnel WebSocket.
     s = vnc_sock
+    tunnel = VNC_TUNNEL
+    _tunnel_stop.clear()
+
     def vnc_to_ws():
+        """Forward VNC frames to WebSocket with zero-copy optimization."""
         try:
-            while True:
-                data = s.recv(65536)
+            while not _tunnel_stop.is_set():
+                data = s.recv(262144)  # 256KB chunks for large frames
                 if not data:
                     break
-                VNC_TUNNEL.send(data)
+                try:
+                    tunnel.send(data, opcode=websocket.ABNF.OPCODE_BINARY)
+                except Exception:
+                    break
         except Exception:
             pass
+
     def ws_to_vnc():
+        """Forward WebSocket commands to VNC socket."""
         try:
-            while True:
-                data = VNC_TUNNEL.recv()
+            while not _tunnel_stop.is_set():
+                data = tunnel.recv()
                 if data is None:
                     break
                 if isinstance(data, str):
                     data = data.encode()
-                s.send(data)
+                try:
+                    s.sendall(data)
+                except Exception:
+                    break
         except Exception:
             pass
+
+    def _tunnel_keepalive():
+        """Send WebSocket ping every 10s to prevent proxy timeout."""
+        while not _tunnel_stop.is_set():
+            time.sleep(10)
+            if _tunnel_stop.is_set():
+                return
+            try:
+                tunnel.ping()
+            except Exception:
+                break
+
     threading.Thread(target=vnc_to_ws, daemon=True).start()
     threading.Thread(target=ws_to_vnc, daemon=True).start()
+    threading.Thread(target=_tunnel_keepalive, daemon=True).start()
+            except Exception:
+                break
+
+    threading.Thread(target=vnc_to_ws, daemon=True).start()
+    threading.Thread(target=ws_to_vnc, daemon=True).start()
+    threading.Thread(target=_tunnel_keepalive, daemon=True).start()
     return {"ok": True}
 
 
@@ -458,17 +498,22 @@ def start_gstreamer(payload=None) -> dict:
     else:
         enc_props = f"bitrate={bitrate // 1000} speed-preset=ultrafast tune=zerolatency bframes=0 ref=1"
     key_int = max(int(fps * key_int_mult), 1)
+    # Ultra-low-latency pipeline: sync=false on ALL elements, no queue buffering
+    if "nv" in encoder:
+        enc_props = f"bitrate={bitrate} tune=zerolatency max-latency=0 preset=1 rc-mode=cbr gpu-id=0"
+    else:
+        enc_props = f"bitrate={bitrate // 1000} speed-preset=ultrafast tune=zerolatency bframes=0 ref=1 threads=4"
     pipeline = (
         f"gst-launch-1.0 -e "
         f"{capture} display-name={DISPLAY} use-damage=false show-pointer=true "
         f"! video/x-raw,framerate={fps}/1 "
-        f"! videoconvert n-threads=2 "
+        f"! videoconvert n-threads=4 "
         f"! video/x-raw,format=I420,width={width},height={height} "
-        f"! {encoder} {enc_props} key-int-max={key_int} threads=2 "
+        f"! {encoder} {enc_props} key-int-max={key_int} threads=4 "
         f"! video/x-h264,stream-format=byte-stream,profile=baseline "
-        f"! h264parse config-interval=1 "
+        f"! h264parse config-interval=-1 "
         f"! identity sync=false "
-        f"! fdsink sync=false"
+        f"! fdsink sync=false async=false"
     )
 
     print(f"[stream] GStreamer pipeline: {pipeline}")
@@ -490,11 +535,17 @@ def start_gstreamer(payload=None) -> dict:
         return start_vnc(payload)
 
     # Open the outbound tunnel to the backend /vnc endpoint.
-    backend = os.environ.get("LUNA_BACKEND_WS", "wss://kyro-cloud-3fp0.onrender.com/agent").replace("/agent", "/vnc")
-    token = os.environ.get("RUNTIME_AUTH_SECRET", "runtime-change-me")
+    backend = BACKEND_WS.replace("/agent", "/vnc")
+    token = RUNTIME_AUTH_SECRET
     ws_url = "%s?token=%s" % (backend, token)
     try:
-        VNC_TUNNEL = websocket.create_connection(ws_url, timeout=15)
+        VNC_TUNNEL = websocket.create_connection(
+            ws_url, timeout=15,
+            suppress_origin=True,
+        )
+        # Enable TCP_NODELAY for zero-latency video forwarding
+        if hasattr(VNC_TUNNEL, 'sock') and VNC_TUNNEL.sock:
+            VNC_TUNNEL.sock.setsockopt(__import__('socket').IPPROTO_TCP, __import__('socket').TCP_NODELAY, 1)
     except Exception as e:
         _GSTREAMER_proc.terminate()
         _GSTREAMER_proc = None
@@ -511,42 +562,59 @@ def start_gstreamer(payload=None) -> dict:
         pass
 
     STREAM_PROC = _GSTREAMER_proc
+    _tunnel_stop.clear()
 
     def _gst_to_ws():
         """Read encoded H.264 frames from GStreamer stdout and send over WebSocket."""
         global _gstreamer_fps, _gstreamer_frame_count, _gstreamer_last_fps_time
         _gstreamer_last_fps_time = time.time()
         _gstreamer_frame_count = 0
+        tunnel = VNC_TUNNEL
+        stdout = _GSTREAMER_proc.stdout
+        frame_buf = b"\x00"
         try:
-            while True:
-                data = _GSTREAMER_proc.stdout.read(65536)
-                if not data:
+            while not _tunnel_stop.is_set():
+                chunk = stdout.read(65536)
+                if not chunk:
                     break
                 _gstreamer_frame_count += 1
-                # Calculate FPS every second.
                 now = time.time()
                 if now - _gstreamer_last_fps_time >= 1.0:
                     _gstreamer_fps = _gstreamer_frame_count / (now - _gstreamer_last_fps_time)
                     _gstreamer_frame_count = 0
                     _gstreamer_last_fps_time = now
-                if VNC_TUNNEL:
-                    # Prefix with 0x00 to mark as video data.
-                    VNC_TUNNEL.send(b"\x00" + data)
+                if tunnel:
+                    try:
+                        tunnel.send(frame_buf + chunk, opcode=websocket.ABNF.OPCODE_BINARY)
+                    except Exception:
+                        break
         except Exception:
             pass
 
     def _gst_stderr():
         """Drain GStreamer stderr to prevent blocking."""
         try:
-            while True:
+            while not _tunnel_stop.is_set():
                 line = _GSTREAMER_proc.stderr.readline()
                 if not line:
                     break
         except Exception:
             pass
 
+    def _tunnel_keepalive():
+        """Send WebSocket ping every 10s to prevent proxy timeout."""
+        while not _tunnel_stop.is_set():
+            time.sleep(10)
+            if _tunnel_stop.is_set():
+                return
+            try:
+                VNC_TUNNEL.ping()
+            except Exception:
+                break
+
     threading.Thread(target=_gst_to_ws, daemon=True).start()
     threading.Thread(target=_gst_stderr, daemon=True).start()
+    threading.Thread(target=_tunnel_keepalive, daemon=True).start()
 
     # Start audio capture in a separate thread.
     _start_audio_capture(VNC_TUNNEL)
@@ -576,6 +644,7 @@ def start_gstreamer(payload=None) -> dict:
 
 def stop_all() -> None:
     global VNC_TUNNEL, _GSTREAMER_proc, _selkies_proc
+    _tunnel_stop.set()  # signal all tunnel threads to exit
     if VNC_TUNNEL:
         try:
             VNC_TUNNEL.close()
