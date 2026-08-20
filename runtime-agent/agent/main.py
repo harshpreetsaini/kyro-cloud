@@ -120,9 +120,11 @@ def on_open(ws):
     global _ws, _ws_gen, _session_active
     _ws = ws
     _ws_gen += 1
-    _session_active = False  # reset on fresh connection
+    _session_active = False
     gen = _ws_gen
     print(f"[agent] connected (gen={gen})")
+    if not TOKEN or TOKEN == "runtime-change-me":
+        print("[agent] WARNING: RUNTIME_AUTH_SECRET is not set! Agent will fail to authenticate.")
     _cleanup_stale()
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
     send(ws, "app.list", apps.detect_apps())
@@ -571,10 +573,20 @@ def _game_install(ws, p):
         try:
             os.makedirs(install_dir, exist_ok=True)
             _send_progress("checking", 0)
+
+            # Check if the installer is available
+            if install_method == "steamcmd":
+                import shutil
+                if not shutil.which("steamcmd"):
+                    send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "steamcmd not installed — run: apt install steamcmd"})
+                    send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "steamcmd not installed"})
+                    return
+
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
                 login_user = auth_code if auth_code else "anonymous"
-                cmd = ["steamcmd", "+login", login_user, f"+app_update {app_id} validate", "+quit"]
+                # Use +app_update with proper syntax
+                cmd = ["steamcmd", "+login", login_user, "+app_update", str(app_id), "validate", "+quit"]
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
