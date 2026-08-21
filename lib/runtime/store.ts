@@ -152,8 +152,9 @@ function connect() {
         break;
       case "pong": {
         // Frontend→backend round-trip latency (the user-facing control latency).
+        // The backend echoes the client timestamp at the top level (event.ts).
         // The backend→Colab leg is reported separately as agentLatencyMs.
-        const ts = (event.payload as { ts?: number })?.ts;
+        const ts = (event as { ts?: number }).ts;
         if (typeof ts === "number") {
           const rtt = Math.max(0, Date.now() - ts);
           state = {
