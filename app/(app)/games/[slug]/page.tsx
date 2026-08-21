@@ -32,7 +32,7 @@ export default function GameDetailsPage() {
   const [imgError, setImgError] = useState(false);
   const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
-  const [providerLogin, setProviderLogin] = useState<Record<string, boolean>>({});
+  const [providerLogin, setProviderLogin] = useState<Record<string, { loggedIn: boolean; username?: string }>>({});
   const [steamUser, setSteamUser] = useState("");
   const [steamPass, setSteamPass] = useState("");
   const [linking, setLinking] = useState(false);
@@ -55,9 +55,10 @@ export default function GameDetailsPage() {
       .then((r) => r.json())
       .then((j) => {
         if (j.ok && j.data) {
-          const map: Record<string, boolean> = {};
+          const map: Record<string, { loggedIn: boolean; username?: string }> = {};
           for (const [k, v] of Object.entries(j.data)) {
-            map[k] = !!(v as { loggedIn?: boolean }).loggedIn;
+            const p = v as { loggedIn?: boolean; username?: string };
+            map[k] = { loggedIn: !!p.loggedIn, username: p.username };
           }
           setProviderLogin(map);
         }
@@ -67,7 +68,7 @@ export default function GameDetailsPage() {
 
   // The game needs at least one of its providers connected to install/play
   const neededProvider = (game?.providers?.[0]?.type || "steam") as string;
-  const providerConnected = !!providerLogin[neededProvider];
+  const providerConnected = !!providerLogin[neededProvider]?.loggedIn;
 
   // Fetch real screenshots from Steam API when game loads
   useEffect(() => {
@@ -329,21 +330,28 @@ export default function GameDetailsPage() {
       {/* Steam account (for protected/owned games) */}
       {neededProvider === "steam" && (
         <section className="panel p-6 mb-6">
-          <h3 className="font-semibold text-lg mb-1">Steam Account</h3>
+          <h3 className="font-semibold text-lg mb-1">Steam Account (required for cloud installs)</h3>
           <p className="text-sm text-muted mb-4">
-            Protected games like World of Warships require your own Steam account (anonymous can&apos;t download them).
-            The cloud PC installs them under your login — your OpenID connection above is not used here.
+            Your &ldquo;connected&rdquo; Steam above is OpenID (library sync only) and gives <b>no password</b> &mdash;
+            steamcmd cannot use it. Protected games like World of Warships must install under your real Steam login,
+            so enter your account credentials below. They&apos;re sent to the cloud PC and used only for the install.
           </p>
           {providerLinked?.steam?.ok ? (
             <p className="text-sm text-green-600">
-              ✓ Linked as <b>{providerLinked.steam.username}</b> — installs run under your account.
+              ✓ Linked as <b>{providerLinked.steam.username}</b> &mdash; installs run under your account.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
+              {providerLogin.steam?.loggedIn && (
+                <p className="text-xs text-muted">
+                  OpenID connected as <b>{providerLogin.steam.username}</b> &mdash; that&apos;s separate; still enter your
+                  Steam <b>login</b> username + password below.
+                </p>
+              )}
               <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
-                  placeholder="Steam username"
+                  placeholder="Steam login username"
                   value={steamUser}
                   onChange={(e) => setSteamUser(e.target.value)}
                   className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"

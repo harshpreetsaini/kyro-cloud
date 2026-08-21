@@ -669,15 +669,28 @@ def _game_install(ws, p):
 
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
-                # auth_code is "username:password" from .auth/steam_auth.txt
-                auth_user = auth_code
-                auth_pass = ""
-                if ":" in auth_code:
-                    auth_user, auth_pass = auth_code.split(":", 1)
-                login_user = auth_user if auth_user else "anonymous"
+                # Prefer credentials sent with the install request; fall back to
+                # the persisted .auth/steam_auth.txt ("username:password").
+                steam_user = (p.get("steamUser") or "").strip()
+                steam_pass = (p.get("steamPass") or "").strip()
+                if not steam_user and auth_code:
+                    if ":" in auth_code:
+                        steam_user, steam_pass = auth_code.split(":", 1)
+                    else:
+                        steam_user = auth_code
+                if steam_user:
+                    # Cache for future installs too
+                    try:
+                        auth_dir = os.path.join(os.path.dirname(__file__), ".auth")
+                        os.makedirs(auth_dir, exist_ok=True)
+                        with open(os.path.join(auth_dir, "steam_auth.txt"), "w") as f:
+                            f.write(f"{steam_user}:{steam_pass}")
+                    except Exception:
+                        pass
+                login_user = steam_user if steam_user else "anonymous"
                 login_args = ["+login", login_user]
-                if auth_pass:
-                    login_args.append(auth_pass)
+                if steam_pass:
+                    login_args.append(steam_pass)
                 print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
                 # force_install_dir MUST come before +login, otherwise steamcmd
                 # errors with "Please use force_install_dir before logon!"

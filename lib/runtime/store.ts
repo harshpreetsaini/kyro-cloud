@@ -45,6 +45,7 @@ interface RuntimeState {
   apps: Record<string, AppEntry>;
   installProgress: Record<string, InstallProgress>;
   providerLinked: Record<string, { ok: boolean; username?: string; error?: string }>;
+  steamCreds: { user: string; pass: string } | null;
 }
 
 const EMPTY: RuntimeState = {
@@ -59,6 +60,7 @@ const EMPTY: RuntimeState = {
   apps: {},
   installProgress: {},
   providerLinked: {},
+  steamCreds: null,
 };
 
 let state: RuntimeState = EMPTY;
@@ -282,6 +284,10 @@ export function runtimeLaunchGame(id: string) {
 }
 
 export function runtimeLinkProvider(provider: string, username: string, password: string) {
+  if (provider === "steam") {
+    state = { ...state, steamCreds: { user: username, pass: password } };
+    emit();
+  }
   runtimeSend("provider.login", { provider, username, password });
 }
 
@@ -326,6 +332,8 @@ export function runtimeInstallGame(id: string) {
     installMethod,
     provider: provider?.type || "steam",
     appId,
+    steamUser: provider?.type === "steam" ? state.steamCreds?.user : undefined,
+    steamPass: provider?.type === "steam" ? state.steamCreds?.pass : undefined,
   });
 }
 
