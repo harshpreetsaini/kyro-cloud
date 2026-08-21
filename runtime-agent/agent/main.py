@@ -921,7 +921,8 @@ def on_close(ws, close_status_code, close_msg):
 
 # ── Main loop with exponential backoff ─────────────────────────────────
 def _has_stdbuf():
-    return __import__("shutil").which("stdbuf") is not None
+    # stdbuf breaks 32-bit steamcmd via LD_PRELOAD mismatch, so always disable it
+    return False
 
 def _self_update_codebase():
     """Best-effort pull of the runtime-agent repo so the Colab agent auto-advances."""
