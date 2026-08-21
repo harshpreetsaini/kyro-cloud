@@ -586,7 +586,7 @@ def _game_install(ws, p):
     game_id = p.get("id", "")
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
-    install_dir = p.get("installDir", "/root/games")
+    install_dir = p.get("installDir", "/home/gamer/games")
     provider_type = p.get("provider", "steam")
     auth_code = ""
     auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider_type}_auth.txt")
