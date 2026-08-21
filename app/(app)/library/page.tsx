@@ -12,7 +12,7 @@ import Link from "next/link";
 type FilterType = "all" | "ready" | "recent";
 
 export default function LibraryPage() {
-  const { launchGame, stopGame, runningGames } = useRuntime();
+  const { launchGame, stopGame, runningGames, installedGames: installedMap } = useRuntime();
   const [games, setGames] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>("all");
@@ -26,13 +26,16 @@ export default function LibraryPage() {
   }, []);
 
   const installedGames = useMemo(() => {
-    let result = games.filter((g) => g.installed);
+    // Merge the live cloud-install state (from the runtime store) with the
+    // catalog so freshly installed games show up without a manual refresh.
+    const merged = games.map((g) => ({ ...g, installed: !!installedMap?.[g.id] || g.installed }));
+    let result = merged.filter((g) => g.installed);
     switch (filter) {
       case "ready": result = result.filter((g) => g.availability === "available" || g.availability === "ready"); break;
       case "recent": result = result.filter((g) => g.lastPlayedAt).sort((a, b) => new Date(b.lastPlayedAt!).getTime() - new Date(a.lastPlayedAt!).getTime()); break;
     }
     return result;
-  }, [games, filter]);
+  }, [games, filter, installedMap]);
 
   const runningCount = games.filter((g) => runningGames.includes(g.id)).length;
 

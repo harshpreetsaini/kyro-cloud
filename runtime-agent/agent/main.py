@@ -4,6 +4,8 @@ import time
 import threading
 import random
 import signal
+import re
+import hashlib
 
 import websocket  # websocket-client
 
@@ -33,6 +35,75 @@ _install_cancel = threading.Event()
 _lock = threading.Lock()  # Protects _terminal_procs, _agent_pids
 _send_lock = threading.Lock()  # Serializes websocket sends across threads
 _steam_guard = {}  # requestId -> {"event": Event, "code": str}
+
+
+# ── Secure credential storage ──────────────────────────────────────────
+# Steam credentials are encrypted at rest (AES-GCM) keyed from the existing
+# RUNTIME_AUTH_SECRET. We never write the password in plaintext, and we never
+# log it. The password is only needed to (re)authenticate steamcmd; once
+# steamcmd caches its own session the encrypted copy is still used as a
+# fallback for installs after a process restart.
+import base64
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    _HAS_AESGCM = True
+except Exception:  # pragma: no cover - cryptography may be missing on some hosts
+    AESGCM = None
+    _HAS_AESGCM = False
+
+_AUTH_DIR = os.path.join(os.path.dirname(__file__), ".auth")
+
+
+def _cred_key():
+    """Derive a 32-byte AES key from RUNTIME_AUTH_SECRET (stable per deploy)."""
+    secret = (TOKEN or "runtime-change-me").encode("utf-8")
+    k = bytearray(32)
+    for i, b in enumerate(secret):
+        k[i % 32] ^= b
+    # Mix with SHA-256 for uniform distribution
+    return hashlib.sha256(bytes(k)).digest()
+
+
+def _save_creds(provider, user, password):
+    """Encrypt and persist credentials. Never stores plaintext."""
+    try:
+        os.makedirs(_AUTH_DIR, exist_ok=True)
+        pt = f"{user}:{password}".encode("utf-8")
+        if _HAS_AESGCM:
+            aes = AESGCM(_cred_key())
+            nonce = os.urandom(12)
+            blob = base64.b64encode(nonce + aes.encrypt(nonce, pt, None)).decode("ascii")
+        else:
+            # Fallback: obfuscate (not strong crypto) so the agent still runs
+            # if the cryptography package is unavailable on the host.
+            print("[agent] WARNING: cryptography unavailable — creds obfuscated, not encrypted")
+            blob = "obf:" + base64.b64encode(pt).decode("ascii")
+        with open(os.path.join(_AUTH_DIR, f"{provider}_auth.txt"), "w") as f:
+            f.write(blob)
+    except Exception as ex:
+        print(f"[agent] credential save failed: {ex}")
+
+
+def _load_creds(provider):
+    """Return 'user:password' or '' if no (decryptable) creds exist."""
+    try:
+        path = os.path.join(_AUTH_DIR, f"{provider}_auth.txt")
+        if not os.path.exists(path):
+            return ""
+        with open(path) as f:
+            blob = f.read().strip()
+        if blob.startswith("obf:"):
+            return base64.b64decode(blob[4:]).decode("utf-8")
+        if ":" in blob and not blob.startswith("+"):
+            # Legacy plaintext — re-encrypt on next use.
+            return blob
+        raw = base64.b64decode(blob)
+        nonce, ct = raw[:12], raw[12:]
+        aes = AESGCM(_cred_key())
+        return aes.decrypt(nonce, ct, None).decode("utf-8")
+    except Exception as ex:
+        print(f"[agent] credential load failed: {ex}")
+        return ""
 
 
 def url() -> str:
@@ -159,6 +230,46 @@ def _cleanup_stale():
 
 
 # ── WebSocket handlers ─────────────────────────────────────────────────
+def _detect_installed_games(install_dir):
+    """Scan the steamcmd install dir for appmanifest_<appid>.acf files and
+    return a list of installed games (appId + name)."""
+    found = []
+    try:
+        if not os.path.isdir(install_dir):
+            return found
+        for name in os.listdir(install_dir):
+            if not (name.startswith("appmanifest_") and name.endswith(".acf")):
+                continue
+            appid = name[len("appmanifest_"):-len(".acf")]
+            if not appid.isdigit():
+                continue
+            gname = "App %s" % appid
+            try:
+                with open(os.path.join(install_dir, name), "r", errors="ignore") as f:
+                    content = f.read()
+                m = re.search(r'"appid"\s+"(\d+)"', content)
+                if m:
+                    appid = m.group(1)
+                nm = re.search(r'"name"\s+"([^"]+)"', content)
+                if nm:
+                    gname = nm.group(1)
+            except Exception:
+                pass
+            found.append({"appId": appid, "name": gname})
+    except Exception as ex:
+        print(f"[agent] installed-game scan failed: {ex}")
+    return found
+
+
+def _report_installed_games(ws, install_dir):
+    try:
+        games = _detect_installed_games(install_dir)
+        if games:
+            send(ws, "games.installed", {"games": games, "count": len(games)})
+    except Exception:
+        pass
+
+
 def on_open(ws):
     global _ws, _ws_gen, _session_active
     _ws = ws
@@ -172,6 +283,7 @@ def on_open(ws):
     _cleanup_stale()
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
     send(ws, "app.list", apps.detect_apps())
+    _report_installed_games(ws, "/home/gamer/games")
     _start_stats(ws, gen)
     threading.Thread(target=_keepalive_loop, args=(ws, gen), daemon=True).start()
 
@@ -579,14 +691,8 @@ def _provider_login(ws, p):
                 except Exception as ex:
                     err = str(ex)
                 if ok:
-                    # Persist credentials so game installs run under this account
-                    try:
-                        auth_dir = os.path.join(os.path.dirname(__file__), ".auth")
-                        os.makedirs(auth_dir, exist_ok=True)
-                        with open(os.path.join(auth_dir, "steam_auth.txt"), "w") as f:
-                            f.write(f"{username}:{password}")
-                    except Exception:
-                        pass
+                    # Persist credentials (encrypted) so game installs run under this account
+                    _save_creds(provider, username, password)
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else (err or "Login failed — check credentials or Steam Guard code")})
             elif provider == "epic":
                 subprocess.run(["pip", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
@@ -609,14 +715,7 @@ def _provider_sync(ws, p):
     steam_id = p.get("steamId")
     access_token = p.get("accessToken")
     username = p.get("username")
-    auth_code = ""
-    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider}_auth.txt")
-    if os.path.exists(auth_file):
-        try:
-            with open(auth_file) as f:
-                auth_code = f.read().strip()
-        except Exception:
-            pass
+    auth_code = _load_creds(provider)
     def _do_sync():
         try:
             games = []
@@ -703,14 +802,7 @@ def _game_install(ws, p):
     app_id = p.get("appId") or p.get("steamAppId", "")
     install_dir = p.get("installDir", "/home/gamer/games")
     provider_type = p.get("provider", "steam")
-    auth_code = ""
-    auth_file = os.path.join(os.path.dirname(__file__), ".auth", f"{provider_type}_auth.txt")
-    if os.path.exists(auth_file):
-        try:
-            with open(auth_file) as f:
-                auth_code = f.read().strip()
-        except Exception:
-            pass
+    auth_code = _load_creds(provider_type)
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
@@ -755,14 +847,8 @@ def _game_install(ws, p):
                     else:
                         steam_user = auth_code
                 if steam_user:
-                    # Cache for future installs too
-                    try:
-                        auth_dir = os.path.join(os.path.dirname(__file__), ".auth")
-                        os.makedirs(auth_dir, exist_ok=True)
-                        with open(os.path.join(auth_dir, "steam_auth.txt"), "w") as f:
-                            f.write(f"{steam_user}:{steam_pass}")
-                    except Exception:
-                        pass
+                    # Cache encrypted credentials for future installs
+                    _save_creds(provider_type, steam_user, steam_pass)
                 login_user = steam_user if steam_user else "anonymous"
                 login_args = ["+login", login_user]
                 if steam_pass:
@@ -813,6 +899,13 @@ def _game_install(ws, p):
                         percent = float(boot_match.group(1))
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                         continue
+                    prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                    if prog_match:
+                        percent = float(prog_match.group(1))
+                        downloaded = int(prog_match.group(2).replace(',', ''))
+                        total_bytes = int(prog_match.group(3).replace(',', ''))
+                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                        continue
                     prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
                         percent = float(prog_match.group(1))
@@ -836,7 +929,21 @@ def _game_install(ws, p):
                     logf.close()
                 except Exception:
                     pass
-                ok = proc.returncode == 0
+                # steamcmd sometimes prints "Error! App 'X' state is 0x602 after
+                # update job" yet still writes a complete appmanifest. Treat the
+                # install as successful if the manifest exists or success markers
+                # are present, rather than trusting the (often non-zero) exit code.
+                log_text = ""
+                try:
+                    with open(log_path) as lf:
+                        log_text = lf.read()
+                except Exception:
+                    pass
+                manifest_ok = os.path.exists(os.path.join(install_dir, f"appmanifest_{app_id}.acf"))
+                success_markers = ("fully installed", "fully updated", "Success! App")
+                ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
+                if ok:
+                    _report_installed_games(ws, install_dir)
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
                 proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

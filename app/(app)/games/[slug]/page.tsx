@@ -38,6 +38,11 @@ export default function GameDetailsPage() {
   const [linking, setLinking] = useState(false);
   const [guardCode, setGuardCode] = useState("");
 
+  // Clear the "Linking..." spinner as soon as we get a definitive result.
+  useEffect(() => {
+    if (linking && providerLinked?.steam) setLinking(false);
+  }, [linking, providerLinked?.steam]);
+
   useEffect(() => {
     const slug = params.slug as string;
     fetch(api("/api/games"), { headers: { ...authHeader() } })

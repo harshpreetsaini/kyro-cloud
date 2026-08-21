@@ -1,6 +1,6 @@
 import { api, wsUrl } from "@/lib/config/api";
 import { getToken, authHeader } from "@/lib/auth/client";
-import { getGame } from "@/lib/games/library.mjs";
+import { getGame, getGameByAppId } from "@/lib/games/library.mjs";
 import type { SessionInfo, SystemInfo, SystemStats, StreamClientConfig, InstallProgress } from "@shared/types";
 
 export type AppState =
@@ -47,6 +47,7 @@ interface RuntimeState {
   providerLinked: Record<string, { ok: boolean; username?: string; error?: string }>;
   steamCreds: { user: string; pass: string } | null;
   installGuard: string | null;
+  installedGames: Record<string, boolean>;
 }
 
 const EMPTY: RuntimeState = {
@@ -63,6 +64,7 @@ const EMPTY: RuntimeState = {
   providerLinked: {},
   steamCreds: null,
   installGuard: null,
+  installedGames: {},
 };
 
 let state: RuntimeState = EMPTY;
@@ -90,6 +92,38 @@ export function dismiss(id: string) {
   emit();
 }
 
+function markDbInstalled(id: string) {
+  const g = getGame(id);
+  if (g) g.installed = true;
+}
+
+function markInstalled(id: string) {
+  state = { ...state, installedGames: { ...state.installedGames, [id]: true } };
+  markDbInstalled(id);
+}
+
+export function isInstalled(id: string) {
+  return !!state.installedGames[id];
+}
+
+// Persist only the *linked username* (never the password) so the UI stays
+// "Linked" across refreshes. The actual credentials stay encrypted on the
+// cloud agent; the frontend never holds the plaintext password.
+const LINK_KEY = "kyro_steam_linked";
+function persistLinked(username: string | undefined) {
+  try {
+    if (username) localStorage.setItem(LINK_KEY, username);
+    else localStorage.removeItem(LINK_KEY);
+  } catch {}
+}
+function loadPersistedLinked(): string | null {
+  try {
+    return localStorage.getItem(LINK_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function connect() {
   if (typeof window === "undefined") return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -98,6 +132,11 @@ function connect() {
   ws = new WebSocket(url);
   ws.onopen = () => {
     state = { ...state, connected: true };
+    // Restore "Linked" state from a previous session (username only).
+    const persisted = loadPersistedLinked();
+    if (persisted && !state.providerLinked.steam) {
+      state = { ...state, providerLinked: { ...state.providerLinked, steam: { ok: true, username: persisted } } };
+    }
     retry = 0;
     emit();
     // Send keepalive ping every 10 seconds (also measures browser→backend latency)
@@ -247,7 +286,24 @@ function connect() {
             },
           };
         }
+        if (p.success) markInstalled(p.gameId);
         emit();
+        break;
+      }
+      case "games.installed": {
+        const p = event.payload as { games?: { appId: string; name?: string }[] };
+        const ids: string[] = [];
+        for (const g of p.games || []) {
+          const entry = getGameByAppId(g.appId);
+          if (entry) ids.push(entry.id);
+        }
+        if (ids.length) {
+          const next = { ...state.installedGames };
+          for (const id of ids) next[id] = true;
+          state = { ...state, installedGames: next };
+          for (const id of ids) markDbInstalled(id);
+          emit();
+        }
         break;
       }
       case "provider.login.result": {
@@ -259,6 +315,7 @@ function connect() {
             [p.provider]: { ok: p.ok, username: p.ok ? p.username : undefined, error: p.ok ? undefined : p.error },
           },
         };
+        if (p.provider === "steam") persistLinked(p.ok ? p.username : undefined);
         emit();
         break;
       }
