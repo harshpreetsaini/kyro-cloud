@@ -113,15 +113,22 @@ done
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..." >> /tmp/luna-agent.log
 cd "$AGENT_DIR/agent"
 nohup setsid bash -c \
-  "while true; do cd '$AGENT_DIR/agent' && python3 main.py >> /tmp/luna-agent.log 2>&1; echo \"[supervisor] agent exited at \$(date), restarting in 3s\" >> /tmp/luna-agent.log; sleep 3; done" \
+  "while true; do cd '$AGENT_DIR/agent' && python3 -u main.py >> /tmp/luna-agent.log 2>&1; echo \"[supervisor] agent exited at \$(date), restarting in 3s\" >> /tmp/luna-agent.log; sleep 3; done" \
   > /dev/null 2>&1 < /dev/null &
 SUP_PID=$!
 echo "[bootstrap] agent supervisor started (PID $SUP_PID)" >> /tmp/luna-agent.log
-sleep 2
+sleep 5
 if kill -0 "$SUP_PID" 2>/dev/null; then
   echo "[bootstrap] supervisor running — agent connecting..." >> /tmp/luna-agent.log
 else
   echo "[bootstrap] WARNING: supervisor died — see /tmp/luna-agent.log" >> /tmp/luna-agent.log
+fi
+
+# Diagnostic: confirm the agent process is actually alive and has logged something
+if pgrep -f "python3 -u main.py" >/dev/null 2>&1; then
+  echo "[bootstrap] agent process confirmed running" >> /tmp/luna-agent.log
+else
+  echo "[bootstrap] WARNING: agent process NOT found — check the log above for import errors" >> /tmp/luna-agent.log
 fi
 
 echo "[bootstrap] done. Tail logs: !tail -n 80 /tmp/luna-agent.log" >> /tmp/luna-agent.log

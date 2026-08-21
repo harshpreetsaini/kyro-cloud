@@ -110,7 +110,7 @@ def on_open(ws):
     _ws_gen += 1
     _session_active = False
     gen = _ws_gen
-    print(f"[agent] connected (gen={gen})")
+    print(f"[agent] connected (gen={gen})", flush=True)
     if not TOKEN or TOKEN == "runtime-change-me":
         print("[agent] WARNING: RUNTIME_AUTH_SECRET is not set! Agent will fail to authenticate.")
     _cleanup_stale()
@@ -693,11 +693,11 @@ def _game_uninstall(ws, p):
 
 
 def on_error(ws, err):
-    print(f"[agent] error: {err}")
+    print(f"[agent] error: {err}", flush=True)
 
 
 def on_close(ws, close_status_code, close_msg):
-    print(f"[agent] disconnected (code={close_status_code}, reason={close_msg})")
+    print(f"[agent] disconnected (code={close_status_code}, reason={close_msg})", flush=True)
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────
@@ -716,7 +716,7 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    print(f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING'}")
+    print(f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING'}", flush=True)
     attempt = 0
     while _running:
         try:
@@ -735,7 +735,7 @@ def main():
             )
             attempt = 0  # reset on clean disconnect
         except Exception as e:
-            print(f"[agent] connection failed: {e}")
+            print(f"[agent] connection failed: {e}", flush=True)
         # Exponential backoff with jitter
         delay = min(RECONNECT_BASE * (2 ** attempt), RECONNECT_MAX)
         jitter = random.uniform(0, delay * 0.3)
