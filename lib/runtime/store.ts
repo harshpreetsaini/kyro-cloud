@@ -429,6 +429,7 @@ export function runtimeInstallGame(id: string) {
     installMethod,
     provider: provider?.type || "steam",
     appId,
+    isFree: !!game?.isFree,
     steamUser: provider?.type === "steam" ? state.steamCreds?.user : undefined,
     steamPass: provider?.type === "steam" ? state.steamCreds?.pass : undefined,
   });
@@ -450,7 +451,7 @@ export function runtimeInstallApp(provider: string, appId: string, name: string)
   });
 }
 
-function _sendInstall(payload: { id: string; name?: string; installMethod: string; provider: string; appId?: string; steamUser?: string; steamPass?: string }) {
+function _sendInstall(payload: { id: string; name?: string; installMethod: string; provider: string; appId?: string; isFree?: boolean; steamUser?: string; steamPass?: string }) {
   const id = payload.id;
   // Set local installing state immediately (backend will confirm shortly)
   state = {
@@ -482,6 +483,7 @@ function _sendInstall(payload: { id: string; name?: string; installMethod: strin
     installMethod: payload.installMethod,
     provider: payload.provider,
     appId: payload.appId,
+    isFree: payload.isFree,
     steamUser: payload.steamUser,
     steamPass: payload.steamPass,
   });

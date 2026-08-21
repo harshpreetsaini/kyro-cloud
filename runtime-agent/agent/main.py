@@ -981,6 +981,16 @@ def _game_install(ws, p):
                 if steam_user:
                     # Cache encrypted credentials for future installs
                     _save_creds(provider_type, steam_user, steam_pass)
+                if not steam_user and provider_type == "steam":
+                    # No linked Steam account available. Only fall back to
+                    # anonymous for free games; paid games must install under
+                    # the owner's account or they fail with "No subscription".
+                    is_free = bool(p.get("isFree"))
+                    if not is_free:
+                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam account not linked — link your Steam account in Providers to install this game."})
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account not linked"})
+                        if logf: logf.close()
+                        return
                 login_user = steam_user if steam_user else "anonymous"
                 login_args = ["+login", login_user]
                 if steam_pass:
