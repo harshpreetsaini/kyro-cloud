@@ -20,6 +20,19 @@ echo "console-setup console-setup/charmap47 select 'UTF-8'" | debconf-set-select
 
 AGENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# ── Repair any broken dpkg state from prior interrupted installs ──
+dpkg --configure -a 2>/dev/null || true
+DEBIAN_FRONTEND=noninteractive apt-get install -f -y 2>/dev/null || true
+
+# ── Neutralise repos that fail to update (e.g. r2u.stat.illinois.edu) ──
+# A broken third-party source makes `apt-get update` abort and can break
+# all subsequent package installs. Comment such lines out (with a backup).
+for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+  [ -f "$f" ] || continue
+  [ -f "${f}.kyrobak" ] || cp "$f" "${f}.kyrobak" 2>/dev/null || true
+  sed -i -E 's|^(deb(-src)? .*(r2u\.stat\.illinois\.edu|steampowered|repo\.steampowered|dl\.winehq\.org).*)$|# disabled by kyro-bootstrap: \1|I' "$f" 2>/dev/null || true
+done
+
 echo "[bootstrap] updating apt..." >> /tmp/luna-agent.log
 DEBIAN_FRONTEND=noninteractive apt-get update -y 2>/dev/null || true
 dpkg --configure -a 2>/dev/null || true
@@ -34,33 +47,38 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 echo "[bootstrap] installing steamcmd..." >> /tmp/luna-agent.log
 dpkg --add-architecture i386 2>/dev/null || true
-# Enable universe + multiverse directly via sources.list (add-apt-repository may be absent)
-if grep -qE '^deb ' /etc/apt/sources.list 2>/dev/null; then
-  BASE=$(grep -m1 '^deb ' /etc/apt/sources.list | awk '{print $2}')
-  CODENAME=$(grep -m1 '^deb ' /etc/apt/sources.list | awk '{print $3}')
-  for comp in universe multiverse; do
-    if ! grep -q " $comp " /etc/apt/sources.list 2>/dev/null; then
-      echo "deb $BASE $CODENAME $comp" >> /etc/apt/sources.list
-      echo "deb $BASE ${CODENAME}-updates $comp" >> /etc/apt/sources.list
-    fi
-  done
+# The r2u third-party R repo on Colab has a misspelt source entry that breaks
+# `apt-get update` (dpkg error code 1). Neutralise it so our apt work is clean,
+# then restore it afterwards so the user's environment is untouched.
+RU2_BAK=/tmp/r2u-sources.bak
+ls /etc/apt/sources.list.d/r2u.list >/dev/null 2>&1 && mv /etc/apt/sources.list.d/r2u.list "$RU2_BAK" 2>/dev/null
+sed -i '/r2u\.stat\.illinois\.edu/d' /etc/apt/sources.list 2>/dev/null
+# Enable universe + multiverse using the canonical Ubuntu archive (NOT the first
+# deb line, which on Colab is the r2u repo) so the apt steamcmd package resolves.
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  CODENAME=${VERSION_CODENAME:-jammy}
+else
+  CODENAME=$(lsb_release -cs 2>/dev/null || echo jammy)
 fi
+BASE="http://archive.ubuntu.com/ubuntu"
+for comp in universe multiverse; do
+  if ! grep -q " $comp " /etc/apt/sources.list 2>/dev/null; then
+    echo "deb $BASE $CODENAME $comp" >> /etc/apt/sources.list
+    echo "deb $BASE ${CODENAME}-updates $comp" >> /etc/apt/sources.list
+  fi
+done
 DEBIAN_FRONTEND=noninteractive apt-get update -y >> /tmp/luna-agent.log 2>&1 || true
-# 32-bit libraries required by the steamcmd binary
+# 32-bit libraries required by the steamcmd binary (main/universe, no license prompt)
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   lib32gcc-s1 lib32stdc++6 libc6-i386 lib32z1 \
   libcurl4:i386 libnss3:i386 2>>/tmp/luna-agent.log || true
-# Primary: apt package (multiverse) — pulls all required 32-bit deps
-if ! command -v steamcmd >/dev/null 2>&1 && [ ! -x /opt/steamcmd/steamcmd.sh ] && [ ! -x /usr/lib/games/steam/steamcmd.sh ]; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd 2>>/tmp/luna-agent.log || true
-fi
-# Secondary: official Valve tarball (predictable, no interactive license prompts)
+# Primary: official Valve tarball from Steam's CDN (verified gzip, no apt/multiverse dependency)
 mkdir -p /opt/steamcmd
 if [ ! -x /opt/steamcmd/steamcmd.sh ] && [ ! -x /usr/lib/games/steam/steamcmd.sh ]; then
   for URL in \
-    "https://steamcdn-a.akamai.net/client/installer/steamcmd_linux.tar.gz" \
-    "https://partner.steamgames.com/download/steamcmd_linux.tar.gz" \
-    "https://cdn.cloudflare.steamstatic.com/client/installer/steamcmd_linux.tar.gz"; do
+    "https://client-update.akamai.steamstatic.com/installer/steamcmd_linux.tar.gz" \
+    "https://cdn.steamstatic.com/client/installer/steamcmd_linux.tar.gz"; do
     echo "[bootstrap] trying steamcmd tarball: $URL" >> /tmp/luna-agent.log
     if command -v curl >/dev/null 2>&1; then
       curl -fsSL "$URL" -o /tmp/steamcmd.tar.gz 2>/dev/null && [ -s /tmp/steamcmd.tar.gz ] && break
@@ -70,10 +88,17 @@ if [ ! -x /opt/steamcmd/steamcmd.sh ] && [ ! -x /usr/lib/games/steam/steamcmd.sh
   done
   if [ -s /tmp/steamcmd.tar.gz ]; then
     tar -xzf /tmp/steamcmd.tar.gz -C /opt/steamcmd 2>>/tmp/luna-agent.log && echo "[bootstrap] steamcmd tarball extracted" >> /tmp/luna-agent.log
+    rm -f /tmp/steamcmd.tar.gz
   else
     echo "[bootstrap] steamcmd tarball download failed (all mirrors)" >> /tmp/luna-agent.log
   fi
 fi
+# Secondary: apt package (multiverse) — pulls all required 32-bit deps automatically
+if [ ! -x /opt/steamcmd/steamcmd.sh ] && [ ! -x /usr/lib/games/steam/steamcmd.sh ] && ! command -v steamcmd >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd 2>>/tmp/luna-agent.log || true
+fi
+# Restore the r2u repo so the user's environment is unchanged.
+[ -f "$RU2_BAK" ] && mv "$RU2_BAK" /etc/apt/sources.list.d/r2u.list 2>/dev/null
 # Normalise: ensure /opt/steamcmd/steamcmd.sh exists (symlink apt's copy if needed)
 if [ ! -x /opt/steamcmd/steamcmd.sh ] && [ -x /usr/lib/games/steam/steamcmd.sh ]; then
   ln -sf /usr/lib/games/steam/steamcmd.sh /opt/steamcmd/steamcmd.sh 2>/dev/null || true

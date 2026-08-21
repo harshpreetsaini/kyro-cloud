@@ -7,9 +7,10 @@ export function api(path: string): string {
 
 export function wsUrl(path: string): string {
   if (API_WS) return `${API_WS.replace(/\/$/, "")}${path}`;
+  // Defensive fallback: connect directly to the Render backend (avoids any
+  // Vercel WebSocket-proxy hop that would inflate control latency).
   if (typeof window !== "undefined") {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.host}${path}`;
+    return `wss://kyro-cloud-3fp0.onrender.com${path}`;
   }
   return `ws://localhost:3000${path}`;
 }
