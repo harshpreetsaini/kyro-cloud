@@ -3,8 +3,17 @@
 export DEBIAN_FRONTEND=noninteractive
 set -o pipefail
 
+# Self-update: if we're running from a git checkout, pull latest so the agent
+# code is never stale (avoids "works on my machine / old clone" issues).
+REPO_ROOT="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)"
+
 : > /tmp/luna-agent.log
 echo "[bootstrap] starting at $(date -u)" >> /tmp/luna-agent.log
+
+if [ -d "$REPO_ROOT/.git" ]; then
+  echo "[bootstrap] self-update: git pull in $REPO_ROOT" >> /tmp/luna-agent.log
+  ( cd "$REPO_ROOT" && git pull --ff-only >> /tmp/luna-agent.log 2>&1 ) || true
+fi
 
 export LUNA_BACKEND_WS="${LUNA_BACKEND_WS:-wss://kyro-cloud-3fp0.onrender.com/agent}"
 export RUNTIME_AUTH_SECRET="${RUNTIME_AUTH_SECRET:-runtime-change-me}"
