@@ -1053,6 +1053,15 @@ def _game_install(ws, p):
                         percent = float(boot_match.group(1))
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                         continue
+                    # steamcmd game-download line: "Update state (0x61) downloading,
+                    # progress: 2.26 (2059360684 / 91106400180)" — percent then bytes.
+                    prog_match = re.search(r'progress:\s*([\d.]+)\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                    if prog_match:
+                        percent = float(prog_match.group(1))
+                        downloaded = int(prog_match.group(2).replace(',', ''))
+                        total_bytes = int(prog_match.group(3).replace(',', ''))
+                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                        continue
                     prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
                     if prog_match:
                         percent = float(prog_match.group(1))
