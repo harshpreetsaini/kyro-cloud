@@ -50,8 +50,30 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libssl-dev libcrypto++-dev 2>/dev/null || true
 
+echo "[bootstrap] installing aiortc system deps..." >> /tmp/luna-agent.log
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  libavcodec-dev libavdevice-dev libavformat-dev libswscale-dev \
+  libjpeg-dev zlib1g-dev 2>/dev/null || true
+
 echo "[bootstrap] installing Python deps..." >> /tmp/luna-agent.log
-python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" 2>/dev/null || true
+python3 -m pip install --quiet -r "$AGENT_DIR/requirements.txt" 2>&1 | tail -5 >> /tmp/luna-agent.log || true
+
+echo "[bootstrap] checking Python deps:" >> /tmp/luna-agent.log
+python3 -c "
+import importlib
+deps = ['websocket', 'psutil', 'PIL']
+for d in deps:
+    try:
+        importlib.import_module(d)
+        print(f'  [OK]   {d}')
+    except ImportError:
+        print(f'  [MISS] {d}')
+try:
+    importlib.import_module('aiortc')
+    print('  [OK]   aiortc')
+except ImportError:
+    print('  [SKIP] aiortc (WebRTC optional)')
+" >> /tmp/luna-agent.log 2>&1
 
 echo "[bootstrap] killing old agents..." >> /tmp/luna-agent.log
 pkill -f "main.py" 2>/dev/null || true

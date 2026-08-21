@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
     const response = NextResponse.redirect(new URL("/providers?success=epic", req.url));
     response.cookies.set("provider_epic", JSON.stringify(STORE[accountId]), {
       httpOnly: true,
+      secure: true,
       path: "/",
       maxAge: 86400 * 30,
     });

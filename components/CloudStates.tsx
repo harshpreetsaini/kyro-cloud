@@ -29,6 +29,7 @@ export function useCloudPhase(): CloudPhase {
   if (state === "ONLINE" || state === "STREAMING") return "online";
   if (state === "RUNTIME_CONNECTED") return "ready";
   if (state && STARTING.includes(state)) return "starting";
+  if (connected && !state) return "starting";
   if (!state || OFFLINE_STATES.includes(state)) return "offline";
   return "offline";
 }

@@ -59,7 +59,8 @@ export async function GET(req: NextRequest) {
 
   const response = NextResponse.redirect(new URL("/providers?success=steam", req.url));
   response.cookies.set("provider_steam", JSON.stringify(STORE[steamId]), {
-    httpOnly: true,
+      httpOnly: true,
+      secure: true,
     path: "/",
     maxAge: 86400 * 30,
   });

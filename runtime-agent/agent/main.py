@@ -696,8 +696,8 @@ def on_error(ws, err):
     print(f"[agent] error: {err}")
 
 
-def on_close(ws, *args):
-    print("[agent] disconnected")
+def on_close(ws, close_status_code, close_msg):
+    print(f"[agent] disconnected (code={close_status_code}, reason={close_msg})")
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────

@@ -12,7 +12,7 @@ try:
     import mss
 
     _HAVE_AIORTC = True
-except Exception as _e:  # pragma: no cover - optional dependency
+except Exception as _e:
     _HAVE_AIORTC = False
     _AIORTC_ERROR = _e
 
@@ -20,29 +20,30 @@ DISPLAY = os.environ.get("LUNA_DISPLAY", ":1")
 _backend = os.environ.get("LUNA_BACKEND_WS", "ws://localhost:3000/agent")
 
 
-class DisplayVideoTrack(VideoStreamTrack):
-    """Captures the Colab Xvfb display and exposes it as a WebRTC video track."""
+if _HAVE_AIORTC:
+    class DisplayVideoTrack(VideoStreamTrack):
+        """Captures the Colab Xvfb display and exposes it as a WebRTC video track."""
 
-    kind = "video"
+        kind = "video"
 
-    def __init__(self, display=DISPLAY):
-        super().__init__()
-        self._sct = mss.mss(display=":" + display.lstrip(":").split(".")[0])
-        self._monitor = self._sct.monitors[1]
-        self._last = 0
+        def __init__(self, display=DISPLAY):
+            super().__init__()
+            self._sct = mss.mss(display=":" + display.lstrip(":").split(".")[0])
+            self._monitor = self._sct.monitors[1]
+            self._last = 0
 
-    async def recv(self):
-        from av import VideoFrame
-        import time
+        async def recv(self):
+            from av import VideoFrame
+            import time
 
-        grab = self._sct.grab(self._monitor)
-        img = self._sct.get_pixels(grab, "rgb24")
-        frame = VideoFrame.from_ndarray(img, format="rgb24")
-        now = time.time()
-        frame.pts = int((now - self._start) * 90000)
-        frame.time_base = 1 / 90000
-        await asyncio.sleep(1 / 30.0)
-        return frame
+            grab = self._sct.grab(self._monitor)
+            img = self._sct.get_pixels(grab, "rgb24")
+            frame = VideoFrame.from_ndarray(img, format="rgb24")
+            now = time.time()
+            frame.pts = int((now - self._start) * 90000)
+            frame.time_base = 1 / 90000
+            await asyncio.sleep(1 / 30.0)
+            return frame
 
 
 def start(payload=None) -> dict:
@@ -149,7 +150,6 @@ def _inject_input(msg):
     if not xdo:
         return
 
-    # Lazy-init: keep a single xdotool process alive for all events.
     proc = getattr(_inject_input, "_proc", None)
     if proc is None or proc.poll() is not None:
         proc = subprocess.Popen(
@@ -179,7 +179,6 @@ def _inject_input(msg):
                 proc.stdin.write(f"{'keydown' if t == 'kdown' else 'keyup'} {key}\n".encode())
         proc.stdin.flush()
     except (BrokenPipeError, OSError):
-        # Process died — will be recreated on next event.
         _inject_input._proc = None
 
 
@@ -198,7 +197,6 @@ def _xkey(k, code):
         return special[k]
     if len(k) == 1:
         return k
-    # code like "KeyA" / "Digit1"
     if code and code.startswith("Key"):
         return code[3:].lower()
     if code and code.startswith("Digit"):

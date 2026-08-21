@@ -23,6 +23,17 @@ export function TopBar() {
   const cloudState = session?.state || "OFFLINE";
   const isStreaming = cloudState === "STREAMING" || cloudState === "ONLINE";
 
+  const statusText = (() => {
+    if (isStreaming) return "STREAMING";
+    if (cloudState === "RUNTIME_CONNECTED") return "READY";
+    if (cloudState === "STARTING" || cloudState === "INITIALIZING" || cloudState === "PREPARING" || cloudState === "CONNECTING") return "STARTING";
+    if (cloudState === "GPU_READY" || cloudState === "DESKTOP_READY" || cloudState === "STREAM_STARTING" || cloudState === "STREAM_READY") return "STARTING";
+    if (cloudState === "ERROR") return "ERROR";
+    if (cloudState === "DISCONNECTED" || cloudState === "RECONNECTING") return "RECONNECTING";
+    if (connected) return "ONLINE";
+    return "OFFLINE";
+  })();
+
   return (
     <header className="h-14 shrink-0 border-b border-white/5 flex items-center justify-between px-4 gap-3">
       <div className="flex items-center gap-3 min-w-0">
@@ -43,7 +54,7 @@ export function TopBar() {
         <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-secondary/60">
           <div className={`w-2 h-2 rounded-full ${connected ? "bg-success" : "bg-muted"}`} />
           <span className="text-[11px] text-muted font-medium">
-            {isStreaming ? "STREAMING" : connected ? "ONLINE" : "OFFLINE"}
+            {statusText}
           </span>
         </div>
 
