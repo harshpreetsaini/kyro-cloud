@@ -27,6 +27,8 @@ _ws_gen = 0
 _stats_stop = None
 _terminal_procs = {}
 _agent_pids = []
+_install_proc = None  # Currently running install subprocess (for cancellation)
+_install_cancel = threading.Event()
 _lock = threading.Lock()  # Protects _terminal_procs, _agent_pids
 
 
@@ -220,6 +222,8 @@ def on_message(ws, raw):
         _game_install(ws, p)
     elif t == "game.uninstall":
         _game_uninstall(ws, p)
+    elif t == "game.install.cancel":
+        _game_install_cancel(ws, p)
     elif t == "stop":
         _session_active = False
         streaming.stop_all()
@@ -595,7 +599,9 @@ def _game_install(ws, p):
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
+        global _install_proc, _install_cancel
         try:
+            _install_cancel.clear()
             os.makedirs(install_dir, exist_ok=True)
             _send_progress("checking", 0)
 
@@ -613,9 +619,14 @@ def _game_install(ws, p):
                 # Use +app_update with proper syntax
                 cmd = ["steamcmd", "+login", login_user, "+app_update", str(app_id), "validate", "+quit"]
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
                 for line in proc.stdout:
+                    if _install_cancel.is_set():
+                        proc.terminate()
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
+                        return
                     lo = line.lower().strip()
                     dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
                     if dl_match:
@@ -646,9 +657,14 @@ def _game_install(ws, p):
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
                 proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
+                    if _install_cancel.is_set():
+                        proc.terminate()
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
+                        return
                     lo = line.lower().strip()
                     prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
@@ -662,9 +678,14 @@ def _game_install(ws, p):
             elif install_method == "lgogdownloader" and app_id:
                 _send_progress("downloading", 0)
                 proc = subprocess.Popen(["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
+                    if _install_cancel.is_set():
+                        proc.terminate()
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
+                        return
                     lo = line.lower().strip()
                     prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
@@ -685,7 +706,20 @@ def _game_install(ws, p):
                 send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Installation failed"})
         except Exception as ex:
             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": str(ex)})
+        finally:
+            _install_proc = None
     threading.Thread(target=_do_install, daemon=True).start()
+
+
+def _game_install_cancel(ws, p):
+    global _install_proc, _install_cancel
+    _install_cancel.set()
+    if _install_proc:
+        try:
+            _install_proc.terminate()
+        except Exception:
+            pass
+    send(ws, "game.install.done", {"gameId": p.get("id", ""), "success": False, "error": "Cancelled", "cancelled": True})
 
 
 def _game_uninstall(ws, p):

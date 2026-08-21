@@ -1,5 +1,6 @@
 import { api, wsUrl } from "@/lib/config/api";
 import { getToken, authHeader } from "@/lib/auth/client";
+import { getGame } from "@/lib/games/library.mjs";
 import type { SessionInfo, SystemInfo, SystemStats, StreamClientConfig, InstallProgress } from "@shared/types";
 
 export type AppState =
@@ -252,6 +253,16 @@ export function runtimeLaunchGame(id: string) {
 }
 
 export function runtimeInstallGame(id: string) {
+  // Look up the game to build the install payload (provider, appId, method)
+  let game: any = null;
+  try { game = getGame(id); } catch {}
+
+  const provider = game?.providers?.[0];
+  const installMethod =
+    provider?.launchMethod === "epic" ? "legendary" :
+    provider?.launchMethod === "gog" ? "lgogdownloader" : "steamcmd";
+  const appId = provider?.appId || provider?.steamAppId || id?.replace(/\D/g, "");
+
   // Set local installing state immediately
   state = {
     ...state,
@@ -262,41 +273,45 @@ export function runtimeInstallGame(id: string) {
   };
   emit();
 
-  // Call Vercel API (relative path) for install, NOT the Render backend
-  fetch(`/api/games/${id}/install`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...authHeader() },
-  }).then(r => r.json()).then(data => {
-    if (!data.ok) {
-      state = {
-        ...state,
-        installProgress: {
-          ...state.installProgress,
-          [id]: { gameId: id, state: "error", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0, error: data.error || "Failed to start installation" },
-        },
-      };
-      emit();
-    }
-  }).catch(() => {
+  // Send install command via WebSocket to the backend (which has the agent)
+  const connected = ws !== null && ws.readyState === WebSocket.OPEN;
+  if (!connected) {
     state = {
       ...state,
       installProgress: {
         ...state.installProgress,
-        [id]: { gameId: id, state: "error", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0, error: "Failed to start installation" },
+        [id]: { gameId: id, state: "error", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0, error: "Not connected to cloud PC. Start your session first." },
       },
     };
     emit();
+    return;
+  }
+
+  runtimeSend("game.install", {
+    id: game?.id || id,
+    name: game?.name,
+    installMethod,
+    provider: provider?.type || "steam",
+    appId,
   });
 }
 
+export function runtimeCancelInstall(id: string) {
+  runtimeSend("game.install.cancel", { id });
+  state = {
+    ...state,
+    installProgress: { ...state.installProgress, [id]: { gameId: id, state: "idle", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 } },
+  };
+  emit();
+}
+
 export function runtimeUninstallGame(id: string) {
-  fetch(`/api/games/${id}/uninstall`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...authHeader() },
-  }).then(() => {
-    delete state.installProgress[id];
-    emit();
-  });
+  runtimeSend("game.uninstall", { id });
+  state = {
+    ...state,
+    installProgress: { ...state.installProgress, [id]: { gameId: id, state: "uninstalling", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 } },
+  };
+  emit();
 }
 
 export function runtimeStopGame(id: string) {

@@ -75,7 +75,8 @@ def _net_rates():
         elif total_bps > 0:
             quality = "poor"
         else:
-            quality = "unknown"
+            # Idle but the agent is connected and reporting — connection is healthy
+            quality = "good"
 
         return {
             "upBps": round(up, 1),

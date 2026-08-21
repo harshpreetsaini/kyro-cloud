@@ -193,7 +193,7 @@ export interface SessionInfo {
 
 export interface InstallProgress {
   gameId: string;
-  state: "idle" | "checking" | "downloading" | "installing" | "verifying" | "ready" | "error";
+  state: "idle" | "checking" | "downloading" | "installing" | "verifying" | "ready" | "uninstalling" | "error" | "cancelled";
   percent: number;
   downloadedBytes: number;
   totalBytes: number;

@@ -15,7 +15,7 @@ type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | 
 export default function GameDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { launchGame, stopGame, installGame, uninstallGame, runningGames, session, connected, installProgress } = useRuntime();
+  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress } = useRuntime();
   const [game, setGame] = useState<GameEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +24,7 @@ export default function GameDetailsPage() {
   const [imgError, setImgError] = useState(false);
   const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
+  const [providerLogin, setProviderLogin] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -36,6 +37,26 @@ export default function GameDetailsPage() {
       .catch(() => setError("Failed to load game"))
       .finally(() => setLoading(false));
   }, [params.slug]);
+
+  // Fetch which providers the user has connected (so we can show Install vs Connect)
+  useEffect(() => {
+    fetch("/api/providers/session", { headers: { ...authHeader() } })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.ok && j.data) {
+          const map: Record<string, boolean> = {};
+          for (const [k, v] of Object.entries(j.data)) {
+            map[k] = !!(v as { loggedIn?: boolean }).loggedIn;
+          }
+          setProviderLogin(map);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // The game needs at least one of its providers connected to install/play
+  const neededProvider = (game?.providers?.[0]?.type || "steam") as string;
+  const providerConnected = !!providerLogin[neededProvider];
 
   // Fetch real screenshots from Steam API when game loads
   useEffect(() => {
@@ -103,6 +124,21 @@ export default function GameDetailsPage() {
     if (!game) return;
     uninstallGame(game.id);
   }, [game, uninstallGame]);
+
+  const handleCancelInstall = useCallback(() => {
+    if (!game) return;
+    cancelInstall(game.id);
+  }, [game, cancelInstall]);
+
+  // Favorites + Share quick actions
+  const [favorite, setFavorite] = useState(false);
+  const toggleFavorite = useCallback(() => setFavorite((f) => !f), []);
+  const shareGame = useCallback(() => {
+    const url = `${window.location.origin}/games/${game?.slug}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(() => setLaunchError(null));
+    }
+  }, [game?.slug]);
 
   const waitForState = (targetState: string, timeoutMs: number): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -244,6 +280,12 @@ export default function GameDetailsPage() {
             {install.state === "error" && (
               <p className="text-sm text-danger">{install.error || "Installation failed"}</p>
             )}
+            {/* Cancel button */}
+            {(install.state === "checking" || install.state === "downloading" || install.state === "installing" || install.state === "verifying") && (
+              <Button variant="danger" size="sm" onClick={handleCancelInstall}>
+                Cancel
+              </Button>
+            )}
           </div>
         </section>
       )}
@@ -281,6 +323,10 @@ export default function GameDetailsPage() {
                 <Button size="lg" onClick={handleInstall} className="bg-green-600 hover:bg-green-700">
                   Download Free
                 </Button>
+              ) : providerConnected ? (
+                <Button size="lg" onClick={handleInstall}>
+                  Install
+                </Button>
               ) : (
                 <>
                   <Button size="lg" onClick={handleInstall}>
@@ -288,7 +334,7 @@ export default function GameDetailsPage() {
                   </Button>
                   <Link href="/providers" passHref>
                     <Button size="lg" variant="secondary">
-                      Connect Account
+                      Connect {neededProvider === "epic" ? "Epic" : neededProvider === "gog" ? "GOG" : "Account"}
                     </Button>
                   </Link>
                 </>
@@ -298,9 +344,14 @@ export default function GameDetailsPage() {
                   Stop Game
                 </Button>
               )}
-              {game.installed && !isRunning && (
+              {(game.installed || (install && install.state === "ready")) && !isRunning && install?.state !== "uninstalling" && (
                 <Button size="lg" variant="secondary" onClick={handleUninstall}>
                   Uninstall
+                </Button>
+              )}
+              {install?.state === "uninstalling" && (
+                <Button size="lg" variant="secondary" disabled>
+                  Uninstalling...
                 </Button>
               )}
             </div>
@@ -410,8 +461,12 @@ export default function GameDetailsPage() {
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Quick Actions</h3>
             <div className="flex flex-col gap-2">
-              <Button variant="secondary" size="sm" className="w-full" disabled>Add to Favorites</Button>
-              <Button variant="secondary" size="sm" className="w-full" disabled>Share</Button>
+              <Button variant={favorite ? "primary" : "secondary"} size="sm" className="w-full" onClick={toggleFavorite}>
+                {favorite ? "♥ Favorited" : "♡ Add to Favorites"}
+              </Button>
+              <Button variant="secondary" size="sm" className="w-full" onClick={shareGame}>
+                Share
+              </Button>
             </div>
           </div>
         </div>
