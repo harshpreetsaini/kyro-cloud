@@ -8,6 +8,7 @@ import { authHeader } from "@/lib/auth/client";
 import { SkeletonCard, EmptyState, Button } from "@/components/ui";
 import type { GameEntry } from "@shared/types";
 import Link from "next/link";
+import { getFavorites } from "@/lib/favorites";
 
 export default function FavoritesPage() {
   const { launchGame, stopGame, runningGames } = useRuntime();
@@ -22,7 +23,8 @@ export default function FavoritesPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const favoriteGames = games.filter((g) => g.favorite);
+  const favIds = getFavorites();
+  const favoriteGames = games.filter((g) => favIds.includes(g.id));
 
   return (
     <div className="flex flex-col gap-5">

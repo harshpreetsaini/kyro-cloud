@@ -8,7 +8,15 @@ import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
 import { runtimeAction } from "@/lib/runtime/store";
+import { isFavorite, toggleFavorite as toggleFavoriteStore } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
+
+function makeShareUid(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  }
+  return Math.random().toString(36).slice(2, 14);
+}
 
 type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | "starting_stream" | "launching_game" | "connecting" | "ready" | "error";
 
@@ -130,13 +138,31 @@ export default function GameDetailsPage() {
     cancelInstall(game.id);
   }, [game, cancelInstall]);
 
-  // Favorites + Share quick actions
+  // Favorites (persisted in localStorage) + Share (copies a unique share URL)
   const [favorite, setFavorite] = useState(false);
-  const toggleFavorite = useCallback(() => setFavorite((f) => !f), []);
+  const [shareCopied, setShareCopied] = useState(false);
+
+  useEffect(() => {
+    if (game) setFavorite(isFavorite(game.id));
+  }, [game?.id]);
+
+  const toggleFavorite = useCallback(() => {
+    if (!game) return;
+    setFavorite(toggleFavoriteStore(game.id));
+  }, [game?.id]);
+
   const shareGame = useCallback(() => {
-    const url = `${window.location.origin}/games/${game?.slug}`;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).then(() => setLaunchError(null));
+    if (!game) return;
+    const uid = makeShareUid();
+    const url = `${window.location.origin}/games/${game.slug}?uid=${uid}`;
+    const done = () => {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(done).catch(done);
+    } else {
+      done();
     }
   }, [game?.slug]);
 
@@ -465,7 +491,7 @@ export default function GameDetailsPage() {
                 {favorite ? "♥ Favorited" : "♡ Add to Favorites"}
               </Button>
               <Button variant="secondary" size="sm" className="w-full" onClick={shareGame}>
-                Share
+                {shareCopied ? "✓ Link copied!" : "Share"}
               </Button>
             </div>
           </div>
