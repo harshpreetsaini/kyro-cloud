@@ -49,6 +49,7 @@ interface RuntimeState {
   installGuard: string | null;
   installedGames: Record<string, boolean>;
   steamOwnedApps: string[];
+  providerGames: Record<string, { appId: string; name: string }[]>;
 }
 
 const EMPTY: RuntimeState = {
@@ -67,6 +68,7 @@ const EMPTY: RuntimeState = {
   installGuard: null,
   installedGames: {},
   steamOwnedApps: [],
+  providerGames: {},
 };
 
 let state: RuntimeState = EMPTY;
@@ -298,6 +300,22 @@ function connect() {
         emit();
         break;
       }
+      case "game.uninstall.done": {
+        const p = event.payload as { gameId?: string; success?: boolean };
+        const id = p.gameId || "";
+        const nextInstalled = { ...state.installedGames };
+        if (id) nextInstalled[id] = false;
+        state = {
+          ...state,
+          installedGames: nextInstalled,
+          installProgress: {
+            ...state.installProgress,
+            [id]: { gameId: id, state: "idle", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 },
+          },
+        };
+        emit();
+        break;
+      }
       case "games.installed": {
         const p = event.payload as { games?: { appId: string; name?: string }[] };
         const ids: string[] = [];
@@ -337,6 +355,20 @@ function connect() {
         const p = event.payload as { provider?: string; username?: string; appIds?: string[] };
         if (p.provider === "steam" && Array.isArray(p.appIds)) {
           state = { ...state, steamOwnedApps: p.appIds.map(String) };
+          emit();
+        }
+        break;
+      }
+      case "provider.library": {
+        const p = event.payload as { provider?: string; games?: { appId: string; name?: string }[] };
+        if (p.provider && Array.isArray(p.games)) {
+          state = {
+            ...state,
+            providerGames: {
+              ...state.providerGames,
+              [p.provider]: p.games.map((g) => ({ appId: String(g.appId), name: g.name || `App ${g.appId}` })),
+            },
+          };
           emit();
         }
         break;
@@ -383,6 +415,7 @@ export function runtimeInstallGame(id: string) {
   // Look up the game to build the install payload (provider, appId, method)
   let game: any = null;
   try { game = getGame(id); } catch {}
+  if (!game) return;
 
   const provider = game?.providers?.[0];
   const installMethod =
@@ -390,6 +423,35 @@ export function runtimeInstallGame(id: string) {
     provider?.launchMethod === "gog" ? "lgogdownloader" : "steamcmd";
   const appId = provider?.appId || provider?.steamAppId || id?.replace(/\D/g, "");
 
+  _sendInstall({
+    id: game.id,
+    name: game.name,
+    installMethod,
+    provider: provider?.type || "steam",
+    appId,
+    steamUser: provider?.type === "steam" ? state.steamCreds?.user : undefined,
+    steamPass: provider?.type === "steam" ? state.steamCreds?.pass : undefined,
+  });
+}
+
+export function runtimeInstallApp(provider: string, appId: string, name: string) {
+  const installMethod =
+    provider === "epic" ? "legendary" :
+    provider === "gog" ? "lgogdownloader" : "steamcmd";
+  const id = `${provider}-${appId}`;
+  _sendInstall({
+    id,
+    name,
+    installMethod,
+    provider,
+    appId,
+    steamUser: provider === "steam" ? state.steamCreds?.user : undefined,
+    steamPass: provider === "steam" ? state.steamCreds?.pass : undefined,
+  });
+}
+
+function _sendInstall(payload: { id: string; name?: string; installMethod: string; provider: string; appId?: string; steamUser?: string; steamPass?: string }) {
+  const id = payload.id;
   // Set local installing state immediately (backend will confirm shortly)
   state = {
     ...state,
@@ -415,13 +477,13 @@ export function runtimeInstallGame(id: string) {
   }
 
   runtimeSend("game.install", {
-    id: game?.id || id,
-    name: game?.name,
-    installMethod,
-    provider: provider?.type || "steam",
-    appId,
-    steamUser: provider?.type === "steam" ? state.steamCreds?.user : undefined,
-    steamPass: provider?.type === "steam" ? state.steamCreds?.pass : undefined,
+    id,
+    name: payload.name,
+    installMethod: payload.installMethod,
+    provider: payload.provider,
+    appId: payload.appId,
+    steamUser: payload.steamUser,
+    steamPass: payload.steamPass,
   });
 }
 

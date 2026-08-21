@@ -12,7 +12,7 @@ type FilterType = "all" | "installed" | "running";
 type SortType = "rating" | "name" | "release" | "metacritic";
 
 export default function GamesPage() {
-  const { launchGame, stopGame, runningGames } = useRuntime();
+  const { launchGame, stopGame, runningGames, isInstalled } = useRuntime();
   const [games, setGames] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -42,7 +42,7 @@ export default function GamesPage() {
     }
     if (genre) result = result.filter((g) => g.genres?.some((gr) => gr.name.toLowerCase() === genre.toLowerCase()));
     switch (filter) {
-      case "installed": result = result.filter((g) => g.installed); break;
+      case "installed": result = result.filter((g) => isInstalled(g.id)); break;
       case "running": result = result.filter((g) => runningGames.includes(g.id)); break;
     }
     switch (sort) {
@@ -54,7 +54,7 @@ export default function GamesPage() {
     return result;
   }, [games, search, filter, sort, genre, runningGames]);
 
-  const installed = games.filter((g) => g.installed).length;
+  const installed = games.filter((g) => isInstalled(g.id)).length;
   const running = games.filter((g) => runningGames.includes(g.id)).length;
 
   return (

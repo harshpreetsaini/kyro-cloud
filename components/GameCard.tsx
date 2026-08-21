@@ -3,23 +3,29 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { GameEntry } from "@shared/types";
+import { useRuntime } from "@/components/providers/RuntimeProvider";
 
 export function GameCard({
   game,
   running,
   onLaunch,
   onStop,
+  onInstall,
   showPlayButton = false,
 }: {
   game: GameEntry;
   running?: boolean;
   onLaunch: (id: string) => void;
   onStop?: (id: string) => void;
+  onInstall?: (id: string) => void;
   showPlayButton?: boolean;
 }) {
   const [imgError, setImgError] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const installing = (game as any).installState === "installing" || (game as any).installState === "updating";
+  const { isInstalled } = useRuntime();
+  const installed = isInstalled(game.id);
+  const _istate = (game as any).installState as string | undefined;
+  const installing = !!_istate && !["idle", "ready", "error", "uninstalling"].includes(_istate);
   const primaryProvider = game.providers?.[0];
 
   // Estimate download size based on game type
@@ -89,7 +95,7 @@ export function GameCard({
           )}
 
           {/* Free badge — top right (when no rating) */}
-          {game.isFree && !game.installed && (
+          {game.isFree && !installed && (
             <span className="absolute top-1.5 right-1.5 text-[9px] text-green-400 bg-green-500/20 px-1.5 py-0.5 rounded backdrop-blur-sm font-bold uppercase">
               Free
             </span>
@@ -98,12 +104,23 @@ export function GameCard({
           {/* Hover play button */}
           {hovered && (
             <div className="absolute inset-0 flex items-center justify-center">
-              {game.installed ? (
+              {installed ? (
                 <button
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); onLaunch(game.id); }}
                   className="bg-accent hover:bg-accent/90 text-white font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
                 >
                   Play
+                </button>
+              ) : installing ? (
+                <span className="bg-white/20 backdrop-blur-sm text-white font-medium px-4 py-1.5 rounded-lg text-sm">
+                  Installing…
+                </span>
+              ) : onInstall ? (
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onInstall(game.id); }}
+                  className="bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
+                >
+                  Install
                 </button>
               ) : (
                 <span className="bg-white/20 backdrop-blur-sm text-white font-medium px-4 py-1.5 rounded-lg text-sm">
@@ -162,10 +179,14 @@ export function GameCard({
               <span className="text-[9px] text-muted">Installing...</span>
             ) : running ? (
               <span className="text-[9px] text-success font-medium">● Running</span>
-            ) : game.installed ? (
+            ) : installing ? (
+              <span className="text-[9px] text-accent">⟳ Installing…</span>
+            ) : installed ? (
               <span className="text-[9px] text-success">● Installed</span>
             ) : game.isFree ? (
               <span className="text-[9px] text-green-400 font-medium">Free</span>
+            ) : onInstall ? (
+              <span className="text-[9px] text-green-400 font-medium">Install</span>
             ) : (
               <span className="text-[9px] text-muted">{game.downloadSize || "Buy"}</span>
             )}

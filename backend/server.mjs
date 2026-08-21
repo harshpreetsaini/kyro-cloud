@@ -2,6 +2,7 @@
 // Runs on Render. Exposes REST API + WebSocket control plane only.
 // Reuses the existing Node-compatible lib/*.mjs modules.
 import http from "http";
+import fs from "fs";
 import path from "path";
 import { setupWebSocket } from "../lib/ws/server.mjs";
 import { getManager } from "../lib/runtime/manager.mjs";
@@ -64,6 +65,17 @@ function readJson(req) {
       return {};
     }
   });
+}
+
+// ---------- linked provider accounts (persisted on Render, not the agent) ----------
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+const LINKED_FILE = path.join(DATA_DIR, "linked.json");
+let linkedAccounts = {};
+try { linkedAccounts = JSON.parse(fs.readFileSync(LINKED_FILE, "utf8")); } catch {}
+globalThis.__linkedAccounts = linkedAccounts;
+function persistLinked() {
+  try { fs.writeFileSync(LINKED_FILE, JSON.stringify(linkedAccounts)); } catch {}
 }
 
 // Minimal multipart/form-data parser (handles text fields + binary files).
@@ -150,21 +162,46 @@ async function handleApi(req, res, url) {
     return sendJson(req, res, 200, { ok: true });
   }
 
-  // Server-to-server relay from the web frontend (callback routes) — links a
-  // provider account to the cloud agent so cloud installs run under that user.
-  if (p === "/api/provider/link" && method === "POST") {
+  // Linked provider accounts — persisted on the backend (Render) so the linked
+  // state survives agent restarts and is the source of truth for all clients.
+  if (p === "/api/provider/link") {
     const svcKey = process.env.BACKEND_SERVICE_KEY;
-    if (svcKey) {
-      const provided = req.headers["x-service-key"];
-      if (provided !== svcKey) return sendJson(req, res, 403, { ok: false, error: "Forbidden" });
-    } else {
+    const agentToken = req.headers["x-agent-token"];
+    const secret = process.env.RUNTIME_AUTH_SECRET || "";
+    const authedByService = svcKey && req.headers["x-service-key"] === svcKey;
+    const authedByAgent = !!agentToken && (secret === "" ? true : agentToken === secret);
+    if (!authedByService && !authedByAgent) {
       const u = await requireAuth(req, res);
       if (!u) return;
     }
-    const body = await readJson(req);
-    if (!body || !body.provider) return sendJson(req, res, 400, { ok: false, error: "Missing provider" });
-    getManager().sendToAgent({ type: "provider.linked", payload: body });
-    return sendJson(req, res, 200, { ok: true });
+    if (method === "POST") {
+      const body = await readJson(req);
+      if (!body || !body.provider) return sendJson(req, res, 400, { ok: false, error: "Missing provider" });
+      const provider = body.provider;
+      linkedAccounts[provider] = {
+        username: body.username || "",
+        password: body.password || "",
+        accountId: body.accountId || "",
+        accessToken: body.accessToken || "",
+        refreshToken: body.refreshToken || "",
+        linkedAt: Date.now(),
+      };
+      persistLinked();
+      // Notify all clients that this provider is now linked (drives the UI everywhere).
+      getManager().broadcast({ type: "provider.login.result", payload: { provider, ok: true, username: body.username || undefined }, ts: Date.now() });
+      if (provider === "steam") {
+        getManager().broadcast({ type: "provider.entitlement", payload: { provider: "steam", username: body.username, appIds: [] }, ts: Date.now() });
+      }
+      // Relay to the cloud agent so installs run under this account.
+      getManager().sendToAgent({ type: "provider.linked", payload: body });
+      return sendJson(req, res, 200, { ok: true });
+    }
+    if (method === "GET") {
+      const provider = url.searchParams.get("provider");
+      if (provider) return sendJson(req, res, 200, { ok: true, data: linkedAccounts[provider] || null });
+      return sendJson(req, res, 200, { ok: true, data: linkedAccounts });
+    }
+    return sendJson(req, res, 405, { ok: false, error: "Method not allowed" });
   }
 
   // everything else requires auth

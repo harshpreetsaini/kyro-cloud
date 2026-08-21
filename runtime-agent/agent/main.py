@@ -111,6 +111,58 @@ def url() -> str:
     return f"{BACKEND_WS}{sep}token={TOKEN}"
 
 
+def _backend_base() -> str:
+    """HTTP base URL derived from the agent's backend WebSocket URL."""
+    u = BACKEND_WS.replace("wss://", "https://").replace("ws://", "http://")
+    if "://" not in u:
+        return u
+    scheme, rest = u.split("://", 1)
+    authority = rest.split("/", 1)[0]
+    return f"{scheme}://{authority}"
+
+
+def _report_linked_to_backend(provider, username, password="", account_id="", access_token="", refresh_token=""):
+    """Persist a linked account on the Render backend (source of truth)."""
+    try:
+        import urllib.request
+        import json as _json
+        body = _json.dumps({
+            "provider": provider,
+            "username": username,
+            "password": password or "",
+            "accountId": account_id or "",
+            "accessToken": access_token or "",
+            "refreshToken": refresh_token or "",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            _backend_base() + "/api/provider/link",
+            data=body,
+            headers={"Content-Type": "application/json", "x-agent-token": TOKEN},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=20)
+    except Exception as ex:
+        print(f"[agent] report linked to backend failed: {ex}")
+
+
+def _fetch_linked_from_backend(provider):
+    """Retrieve a linked account from the Render backend (used for installs)."""
+    try:
+        import urllib.request
+        import json as _json
+        req = urllib.request.Request(
+            _backend_base() + f"/api/provider/link?provider={provider}",
+            headers={"x-agent-token": TOKEN},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        return data.get("data") or {}
+    except Exception as ex:
+        print(f"[agent] fetch linked from backend failed: {ex}")
+        return {}
+
+
 def send(ws, type_: str, payload=None):
     try:
         with _send_lock:
@@ -664,9 +716,13 @@ def _provider_login(ws, p):
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
                     gseq = [0]
+                    authed = False
+                    guard_attempts = [0]
+                    MAX_GUARD = 3
                     for line in proc.stdout:
                         if "Steam account successfully logged in" in line:
                             ok = True
+                            authed = True
                             # Pull the owned-apps list while we're authenticated.
                             try:
                                 proc.stdin.write("+apps_list\n")
@@ -675,8 +731,13 @@ def _provider_login(ws, p):
                                 pass
                             continue
                         lo = line.lower()
-                        if _is_steam_guard_prompt(lo):
-                            gseq[0] += 1
+                        # Only handle a guard prompt before we're authenticated; once
+                        # logged in, ignore any trailing guard-related log lines.
+                        if not authed and _is_steam_guard_prompt(lo):
+                            guard_attempts[0] += 1
+                            if guard_attempts[0] > MAX_GUARD:
+                                err = "Steam Guard code was rejected too many times. Check the code/email and try again."
+                                break
                             code = _request_steam_guard(f"login-{username}")
                             if code and proc.stdin:
                                 try:
@@ -707,6 +768,8 @@ def _provider_login(ws, p):
                 if ok:
                     # Persist credentials (encrypted) so game installs run under this account
                     _save_creds(provider, username, password)
+                    # Also persist the linked account on the Render backend (source of truth).
+                    _report_linked_to_backend("steam", username, password)
                     if owned:
                         send(ws, "provider.entitlement", {"provider": "steam", "username": username, "appIds": owned})
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else (err or "Login failed — check credentials or Steam Guard code")})
@@ -835,6 +898,7 @@ def _provider_linked(ws, p):
             }
             with open(os.path.join(cfg_dir, "user.json"), "w") as f:
                 json.dump(user_json, f)
+            _report_linked_to_backend("epic", username, account_id=account_id, access_token=access_token, refresh_token=refresh_token)
             send(ws, "provider.login.result", {"provider": "epic", "ok": True, "username": username})
         elif provider == "gog":
             # lgogdownloader authenticates via stored tokens; persist them so
@@ -848,6 +912,7 @@ def _provider_linked(ws, p):
                     "username": username,
                     "user_id": account_id,
                 }, f)
+            _report_linked_to_backend("gog", username, account_id=account_id, access_token=access_token, refresh_token=refresh_token)
             send(ws, "provider.login.result", {"provider": "gog", "ok": True, "username": username})
         else:
             send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Cannot link provider {provider} this way."})
@@ -864,6 +929,12 @@ def _game_install(ws, p):
     install_dir = p.get("installDir", "/home/gamer/games")
     provider_type = p.get("provider", "steam")
     auth_code = _load_creds(provider_type)
+    # Fall back to the linked account persisted on the backend (Render) so
+    # installs work even after the agent process restarted and lost local creds.
+    if not auth_code and provider_type == "steam":
+        linked = _fetch_linked_from_backend("steam")
+        if linked.get("username"):
+            auth_code = f"{linked['username']}:{linked.get('password', '')}"
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
@@ -926,7 +997,9 @@ def _game_install(ws, p):
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
-                _guard_seq = [0]
+                authed = False
+                guard_attempts = [0]
+                MAX_GUARD = 3
                 for line in proc.stdout:
                     try:
                         logf.write(line); logf.flush()
@@ -937,9 +1010,19 @@ def _game_install(ws, p):
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
-                    # Steam Guard (2FA) code requested — ask the user and feed it back
-                    if _is_steam_guard_prompt(lo):
-                        _guard_seq[0] += 1
+                    # Steam Guard (2FA) code requested — ask the user and feed it
+                    # back. Only before we're authenticated; once the download
+                    # starts we ignore any trailing guard-related log lines.
+                    if not authed and _is_steam_guard_prompt(lo):
+                        guard_attempts[0] += 1
+                        if guard_attempts[0] > MAX_GUARD:
+                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
+                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                            return
                         code = _request_steam_guard(f"install-{game_id}")
                         if code and proc.stdin:
                             try:
@@ -983,6 +1066,7 @@ def _game_install(ws, p):
                         total_bytes = int(size_match.group(1).replace(',', ''))
                         continue
                     if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
+                        authed = True
                         percent = min(percent + 2, 95)
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                 proc.wait()
@@ -1074,7 +1158,7 @@ def _game_install_cancel(ws, p):
 
 
 def _game_uninstall(ws, p):
-    send(ws, "game.install.done", {"gameId": p.get("id", ""), "success": True})
+    send(ws, "game.uninstall.done", {"gameId": p.get("id", ""), "success": True})
 
 
 def on_error(ws, err):

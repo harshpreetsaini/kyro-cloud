@@ -3,7 +3,7 @@
 import { useEffect, ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSyncExternalStore } from "react";
-import { runtimeStore, ensureConnected, runtimeAction, runtimeLaunchGame, runtimeStopGame, runtimeInstallGame, runtimeUninstallGame, runtimeCancelInstall, runtimeSend, dismiss, runtimeFetchApps, runtimeLaunchApp, runtimeStopApp, runtimeLinkProvider, runtimeSubmitGuard, isInstalled, isOwned, AppEntry } from "@/lib/runtime/store";
+import { runtimeStore, ensureConnected, runtimeAction, runtimeLaunchGame, runtimeStopGame, runtimeInstallGame, runtimeInstallApp, runtimeUninstallGame, runtimeCancelInstall, runtimeSend, dismiss, runtimeFetchApps, runtimeLaunchApp, runtimeStopApp, runtimeLinkProvider, runtimeSubmitGuard, isInstalled, isOwned, AppEntry } from "@/lib/runtime/store";
 import { getToken } from "@/lib/auth/client";
 
 export function RuntimeProvider({ children }: { children: ReactNode }) {
@@ -34,6 +34,7 @@ export function useRuntime() {
     installGuard: s.installGuard,
     installedGames: s.installedGames,
     steamOwnedApps: s.steamOwnedApps,
+    providerGames: s.providerGames,
     isInstalled,
     isOwned,
     submitGuard: runtimeSubmitGuard,
@@ -43,6 +44,7 @@ export function useRuntime() {
     launchGame: runtimeLaunchGame,
     stopGame: runtimeStopGame,
     installGame: runtimeInstallGame,
+    installApp: runtimeInstallApp,
     uninstallGame: runtimeUninstallGame,
     cancelInstall: runtimeCancelInstall,
     linkProvider: runtimeLinkProvider,
