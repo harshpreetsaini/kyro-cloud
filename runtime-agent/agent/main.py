@@ -59,6 +59,17 @@ def agent_send(type_: str, payload=None):
 _GUARD_SEQ = [0]
 
 
+def _is_steam_guard_prompt(lo: str) -> bool:
+    """steamcmd prints the guard prompt split across lines, e.g.
+    '...enter the Steam Guard' / ' code from that message.' — so match the
+    stable phrases rather than the contiguous 'steam guard code'."""
+    return "steam guard" in lo and (
+        "not been authenticated" in lo
+        or "enter the steam guard" in lo
+        or "guard code" in lo
+    )
+
+
 def _request_steam_guard(request_prefix: str, timeout: int = 180) -> str:
     """Ask the frontend for a Steam Guard code and block until it arrives."""
     _GUARD_SEQ[0] += 1
@@ -540,7 +551,7 @@ def _provider_login(ws, p):
                             ok = True
                             break
                         lo = line.lower()
-                        if "steam guard code" in lo:
+                        if _is_steam_guard_prompt(lo):
                             gseq[0] += 1
                             code = _request_steam_guard(f"login-{username}")
                             if code and proc.stdin:
@@ -776,7 +787,7 @@ def _game_install(ws, p):
                         return
                     lo = line.lower().strip()
                     # Steam Guard (2FA) code requested — ask the user and feed it back
-                    if "steam guard code" in lo:
+                    if _is_steam_guard_prompt(lo):
                         _guard_seq[0] += 1
                         code = _request_steam_guard(f"install-{game_id}")
                         if code and proc.stdin:
