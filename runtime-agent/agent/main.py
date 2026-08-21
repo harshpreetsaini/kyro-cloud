@@ -6,6 +6,7 @@ import random
 import signal
 import re
 import hashlib
+import shutil
 
 import websocket  # websocket-client
 
@@ -32,6 +33,33 @@ _terminal_procs = {}
 _agent_pids = []
 _install_proc = None  # Currently running install subprocess (for cancellation)
 _install_cancel = threading.Event()
+_install_dirs = {}  # gameId -> install_dir (for per-game cleanup on cancel)
+
+
+def _games_base():
+    """Root folder holding one sub-directory per installed game."""
+    return "/home/gamer/games"
+
+
+def _cleanup_install(game_id):
+    """Remove the partially downloaded files for a game after cancel or
+    failure. Only runs for directories registered as the active install of
+    that game, so installed (completed) games are never touched. Best-effort
+    and idempotent."""
+    global _install_dirs
+    d = _install_dirs.get(game_id)
+    if not d:
+        return  # not an active install — don't touch completed games
+    try:
+        del _install_dirs[game_id]
+    except Exception:
+        pass
+    if d.startswith(_games_base()) and os.path.abspath(d) != os.path.abspath(_games_base()):
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+            print(f"[agent] cleaned up install dir {d}", flush=True)
+        except Exception as ex:
+            print(f"[agent] cleanup failed for {d}: {ex}", flush=True)
 _lock = threading.Lock()  # Protects _terminal_procs, _agent_pids
 _send_lock = threading.Lock()  # Serializes websocket sends across threads
 _steam_guard = {}  # requestId -> {"event": Event, "code": str}
@@ -282,32 +310,43 @@ def _cleanup_stale():
 
 
 # ── WebSocket handlers ─────────────────────────────────────────────────
-def _detect_installed_games(install_dir):
-    """Scan the steamcmd install dir for appmanifest_<appid>.acf files and
-    return a list of installed games (appId + name)."""
+def _detect_installed_games(base_dir):
+    """Scan the games base folder (and each per-game sub-directory) for
+    appmanifest_<appid>.acf files and return a list of installed games
+    (appId + name)."""
     found = []
     try:
-        if not os.path.isdir(install_dir):
+        if not os.path.isdir(base_dir):
             return found
-        for name in os.listdir(install_dir):
-            if not (name.startswith("appmanifest_") and name.endswith(".acf")):
-                continue
-            appid = name[len("appmanifest_"):-len(".acf")]
-            if not appid.isdigit():
-                continue
-            gname = "App %s" % appid
+        candidates = [base_dir]
+        for name in os.listdir(base_dir):
+            sub = os.path.join(base_dir, name)
+            if os.path.isdir(sub):
+                candidates.append(sub)
+        for d in candidates:
             try:
-                with open(os.path.join(install_dir, name), "r", errors="ignore") as f:
-                    content = f.read()
-                m = re.search(r'"appid"\s+"(\d+)"', content)
-                if m:
-                    appid = m.group(1)
-                nm = re.search(r'"name"\s+"([^"]+)"', content)
-                if nm:
-                    gname = nm.group(1)
+                entries = os.listdir(d)
             except Exception:
-                pass
-            found.append({"appId": appid, "name": gname})
+                continue
+            for name in entries:
+                if not (name.startswith("appmanifest_") and name.endswith(".acf")):
+                    continue
+                appid = name[len("appmanifest_"):-len(".acf")]
+                if not appid.isdigit():
+                    continue
+                gname = "App %s" % appid
+                try:
+                    with open(os.path.join(d, name), "r", errors="ignore") as f:
+                        content = f.read()
+                    m = re.search(r'"appid"\s+"(\d+)"', content)
+                    if m:
+                        appid = m.group(1)
+                    nm = re.search(r'"name"\s+"([^"]+)"', content)
+                    if nm:
+                        gname = nm.group(1)
+                except Exception:
+                    pass
+                found.append({"appId": appid, "name": gname})
     except Exception as ex:
         print(f"[agent] installed-game scan failed: {ex}")
     return found
@@ -926,7 +965,9 @@ def _game_install(ws, p):
     game_id = p.get("id", "")
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
-    install_dir = p.get("installDir", "/home/gamer/games")
+    # Each game gets its own sub-directory so cancelling one never touches
+    # another game's files. Frontend may override via installDir.
+    install_dir = p.get("installDir") or os.path.join(_games_base(), game_id)
     provider_type = p.get("provider", "steam")
     auth_code = _load_creds(provider_type)
     # Fall back to the linked account persisted on the backend (Render) so
@@ -938,9 +979,10 @@ def _game_install(ws, p):
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
     def _do_install():
-        global _install_proc, _install_cancel
+        global _install_proc, _install_cancel, _install_dirs
         try:
             _install_cancel.clear()
+            _install_dirs[game_id] = install_dir
             os.makedirs(install_dir, exist_ok=True)
             # Always-open install log so we can diagnose even if app_id is missing
             log_path = os.path.join("/tmp", f"install-{game_id}.log")
@@ -1003,7 +1045,7 @@ def _game_install(ws, p):
                 _log(f"cmd: {' '.join(cmd)}\n")
                 cmd_buf = ["steamcmd", "+force_install_dir", install_dir] + login_args + ["+app_update", str(app_id), "validate", "+quit"]
                 cmd_buf = _wrap_steamcmd(cmd_buf)
-                proc = subprocess.Popen(cmd_buf, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                proc = subprocess.Popen(cmd_buf, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
@@ -1016,7 +1058,8 @@ def _game_install(ws, p):
                     except Exception:
                         pass
                     if _install_cancel.is_set():
-                        proc.terminate()
+                        _kill_install_proc()
+                        _cleanup_install(game_id)
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
@@ -1028,10 +1071,8 @@ def _game_install(ws, p):
                         if guard_attempts[0] > MAX_GUARD:
                             send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
                             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
-                            try:
-                                proc.terminate()
-                            except Exception:
-                                pass
+                            _kill_install_proc()
+                            _cleanup_install(game_id)
                             return
                         code = _request_steam_guard(f"install-{game_id}")
                         if code and proc.stdin:
@@ -1107,16 +1148,17 @@ def _game_install(ws, p):
                 success_markers = ("fully installed", "fully updated", "Success! App")
                 ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
                 if ok:
-                    _report_installed_games(ws, install_dir)
+                    _report_installed_games(ws, _games_base())
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
-                proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
                     if _install_cancel.is_set():
-                        proc.terminate()
+                        _kill_install_proc()
+                        _cleanup_install(game_id)
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
@@ -1131,13 +1173,14 @@ def _game_install(ws, p):
                 ok = proc.returncode == 0
             elif install_method == "lgogdownloader" and app_id:
                 _send_progress("downloading", 0)
-                proc = subprocess.Popen(["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.Popen(["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
                     if _install_cancel.is_set():
-                        proc.terminate()
+                        _kill_install_proc()
+                        _cleanup_install(game_id)
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
@@ -1154,6 +1197,10 @@ def _game_install(ws, p):
                 send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": f"Install method '{install_method}' not available."})
                 return
             if ok:
+                try:
+                    _install_dirs.pop(game_id, None)
+                except Exception:
+                    pass
                 _send_progress("ready", 100)
                 send(ws, "game.install.done", {"gameId": game_id, "success": True})
             else:
@@ -1165,14 +1212,26 @@ def _game_install(ws, p):
     threading.Thread(target=_do_install, daemon=True).start()
 
 
+def _kill_install_proc():
+    """Kill the install subprocess and its whole process group (the real
+    downloader is a child of the `script` wrapper and needs SIGKILL on the
+    group, not a plain terminate of the wrapper)."""
+    global _install_proc
+    if _install_proc and _install_proc.pid:
+        try:
+            os.killpg(os.getpgid(_install_proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                _install_proc.kill()
+            except Exception:
+                pass
+
+
 def _game_install_cancel(ws, p):
     global _install_proc, _install_cancel
     _install_cancel.set()
-    if _install_proc:
-        try:
-            _install_proc.terminate()
-        except Exception:
-            pass
+    _kill_install_proc()
+    _cleanup_install(p.get("id", ""))
     send(ws, "game.install.done", {"gameId": p.get("id", ""), "success": False, "error": "Cancelled", "cancelled": True})
 
 
