@@ -384,6 +384,8 @@ def on_message(ws, raw):
         _provider_sync(ws, p)
     elif t == "provider.logout":
         _provider_logout(ws, p)
+    elif t == "provider.linked":
+        _provider_linked(ws, p)
     elif t == "game.install":
         # Run in a background thread so the WS loop stays responsive
         # (e.g. to receive the Steam Guard code mid-login).
@@ -652,6 +654,8 @@ def _provider_login(ws, p):
                 import subprocess
                 ok = False
                 err = None
+                err = None
+                owned = []
                 try:
                     cmd = ["steamcmd", "+login", username, password]
                     cmd = _wrap_steamcmd(cmd)
@@ -663,7 +667,13 @@ def _provider_login(ws, p):
                     for line in proc.stdout:
                         if "Steam account successfully logged in" in line:
                             ok = True
-                            break
+                            # Pull the owned-apps list while we're authenticated.
+                            try:
+                                proc.stdin.write("+apps_list\n")
+                                proc.stdin.flush()
+                            except Exception:
+                                pass
+                            continue
                         lo = line.lower()
                         if _is_steam_guard_prompt(lo):
                             gseq[0] += 1
@@ -675,6 +685,10 @@ def _provider_login(ws, p):
                                 except Exception:
                                     pass
                             continue
+                        # Steamcmd apps_list output: "<appid>\t<name>"
+                        s = line.strip()
+                        if s and s[0].isdigit() and "\t" in s:
+                            owned.append(s.split("\t", 1)[0])
                     try:
                         if proc.stdin:
                             proc.stdin.write("+quit\n")
@@ -693,15 +707,14 @@ def _provider_login(ws, p):
                 if ok:
                     # Persist credentials (encrypted) so game installs run under this account
                     _save_creds(provider, username, password)
+                    if owned:
+                        send(ws, "provider.entitlement", {"provider": "steam", "username": username, "appIds": owned})
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else (err or "Login failed — check credentials or Steam Guard code")})
-            elif provider == "epic":
-                subprocess.run(["pip", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
-                result = subprocess.run(["legendary", "auth", "--code", username], capture_output=True, text=True, timeout=60)
-                send(ws, "provider.login.result", {"provider": provider, "ok": result.returncode == 0, "username": username if result.returncode == 0 else None})
-            elif provider == "gog":
-                subprocess.run(["pip", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
-                result = subprocess.run(["lgogdownloader", "--login"], input=f"{username}\n{password}\n", capture_output=True, text=True, timeout=60)
-                send(ws, "provider.login.result", {"provider": provider, "ok": result.returncode == 0, "username": username if result.returncode == 0 else None})
+            elif provider in ("epic", "gog"):
+                # Epic/GOG linking is performed via the web OAuth flow, which relays the
+                # tokens to the agent through the "provider.linked" event. Credential-based
+                # login here is not supported.
+                send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": "Use the OAuth login (Provider page) to link your Epic/GOG account."})
             else:
                 send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Provider {provider} not supported."})
         except Exception as ex:
@@ -784,6 +797,8 @@ def _provider_sync(ws, p):
                 if not games and result.returncode != 0:
                     send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": "lgogdownloader not available. Run 'lgogdownloader --login' on Colab."})
                     return
+            if provider == "steam" and games:
+                send(ws, "provider.entitlement", {"provider": "steam", "username": sync_user, "appIds": [g["appId"] for g in games]})
             send(ws, "provider.library", {"provider": provider, "games": games, "count": len(games)})
         except Exception as ex:
             send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": str(ex)})
@@ -792,6 +807,52 @@ def _provider_sync(ws, p):
 
 def _provider_logout(ws, p):
     send(ws, "provider.logout.result", {"provider": p.get("provider", "steam"), "ok": True})
+
+
+def _provider_linked(ws, p):
+    """Persist a provider account linked via the web OAuth flow so cloud installs
+    run under that user. Tokens arrive relayed from the frontend callback route."""
+    provider = p.get("provider", "")
+    payload = p.get("payload", p)
+    username = payload.get("username", "")
+    access_token = payload.get("accessToken", "")
+    refresh_token = payload.get("refreshToken", "")
+    account_id = payload.get("accountId", "")
+
+    try:
+        if provider == "epic":
+            import time
+            # legendary stores its auth at ~/.config/legendary/user.json
+            cfg_dir = os.path.expanduser("~/.config/legendary")
+            os.makedirs(cfg_dir, exist_ok=True)
+            user_json = {
+                "user_id": account_id or username,
+                "display_name": username,
+                "account_id": account_id or username,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "expires_at": int(time.time()) + 3600,
+            }
+            with open(os.path.join(cfg_dir, "user.json"), "w") as f:
+                json.dump(user_json, f)
+            send(ws, "provider.login.result", {"provider": "epic", "ok": True, "username": username})
+        elif provider == "gog":
+            # lgogdownloader authenticates via stored tokens; persist them so
+            # `lgogdownloader download` can run under this GOG account.
+            cfg_dir = os.path.expanduser("~/.config/lgogdownloader")
+            os.makedirs(cfg_dir, exist_ok=True)
+            with open(os.path.join(cfg_dir, "gog_tokens.json"), "w") as f:
+                json.dump({
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "username": username,
+                    "user_id": account_id,
+                }, f)
+            send(ws, "provider.login.result", {"provider": "gog", "ok": True, "username": username})
+        else:
+            send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Cannot link provider {provider} this way."})
+    except Exception as ex:
+        send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": str(ex)})
 
 
 # ── Game install ───────────────────────────────────────────────────────

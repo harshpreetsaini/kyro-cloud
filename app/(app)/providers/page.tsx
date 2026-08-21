@@ -30,12 +30,19 @@ const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount" | "method"
 ];
 
 export default function ProvidersPage() {
-  const { connected } = useRuntime();
+  const { connected, linkProvider, providerLinked } = useRuntime();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginSuccess, setLoginSuccess] = useState<string | null>(null);
+  const [steamUser, setSteamUser] = useState("");
+  const [steamPass, setSteamPass] = useState("");
+  const [linking, setLinking] = useState(false);
+
+  useEffect(() => {
+    if (providerLinked?.steam) setLinking(false);
+  }, [providerLinked?.steam]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -108,6 +115,17 @@ export default function ProvidersPage() {
       });
     } catch {}
     fetchProviders();
+  };
+
+  const handleLinkSteam = () => {
+    if (!steamUser || !steamPass || !connected) return;
+    setLinking(true);
+    try {
+      linkProvider("steam", steamUser, steamPass);
+    } catch (e) {
+      console.error("linkProvider failed", e);
+    }
+    setTimeout(() => setLinking(false), 15000);
   };
 
   if (loading) {
@@ -200,6 +218,48 @@ export default function ProvidersPage() {
             )}
           </div>
         ))}
+      </div>
+
+      {/* Steam cloud-install account (steamcmd) — required for installing owned games */}
+      <div className="panel p-5 flex flex-col gap-3 border-accent/30">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center text-2xl">🎮</div>
+          <div className="min-w-0">
+            <h3 className="font-semibold">Steam Account (for cloud installs)</h3>
+            {providerLinked?.steam?.ok ? (
+              <p className="text-sm text-green-600">✓ Linked as {providerLinked.steam.username} — installs run under your account</p>
+            ) : (
+              <p className="text-xs text-muted">Enter your Steam login + password. steamcmd uses them only to install games you own.</p>
+            )}
+            {providerLinked?.steam?.error && (
+              <p className="text-sm text-danger mt-1">{providerLinked.steam.error}</p>
+            )}
+          </div>
+        </div>
+        {!providerLinked?.steam?.ok && (
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              placeholder="Steam login username"
+              value={steamUser}
+              onChange={(e) => setSteamUser(e.target.value)}
+              className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
+            />
+            <input
+              type="password"
+              placeholder="Steam password"
+              value={steamPass}
+              onChange={(e) => setSteamPass(e.target.value)}
+              className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
+            />
+            <Button onClick={handleLinkSteam} disabled={!steamUser || !steamPass || linking || !connected}>
+              {linking ? "Linking..." : "Link Account"}
+            </Button>
+          </div>
+        )}
+        {!connected && (
+          <p className="text-xs text-danger">Connect your cloud PC first before linking.</p>
+        )}
       </div>
 
       {/* How it works */}

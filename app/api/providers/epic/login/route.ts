@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Epic Games OAuth — uses their public client ID
+// Epic Games OAuth — uses YOUR registered client (set EPIC_CLIENT_ID / EPIC_CLIENT_SECRET).
+// Register the app at https://dev.epicgames.com/ with the authorized redirect URI:
+//   {your-site}/api/providers/epic/callback
 export async function GET(req: NextRequest) {
   const origin = new URL(req.url).origin;
+  const clientId = process.env.EPIC_CLIENT_ID;
+  if (!clientId) {
+    return NextResponse.redirect(new URL("/providers?error=epic_not_configured", req.url));
+  }
   const redirectUri = `${origin}/api/providers/epic/callback`;
 
   const params = new URLSearchParams({
-    client_id: "875a544986424806b74309c7c139db15",
+    client_id: clientId,
     response_type: "code",
     redirect_uri: redirectUri,
     scope: "basic_profile identify",

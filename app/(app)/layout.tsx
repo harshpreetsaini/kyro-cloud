@@ -5,6 +5,7 @@ import { TopBar } from "@/components/TopBar";
 import { RuntimeProvider } from "@/components/providers/RuntimeProvider";
 import { Notifications } from "@/components/Notifications";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import SteamGuardModal from "@/components/SteamGuardModal";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -19,6 +20,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       <Notifications />
+      <SteamGuardModal />
     </RuntimeProvider>
   );
 }

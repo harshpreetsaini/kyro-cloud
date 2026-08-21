@@ -150,6 +150,23 @@ async function handleApi(req, res, url) {
     return sendJson(req, res, 200, { ok: true });
   }
 
+  // Server-to-server relay from the web frontend (callback routes) — links a
+  // provider account to the cloud agent so cloud installs run under that user.
+  if (p === "/api/provider/link" && method === "POST") {
+    const svcKey = process.env.BACKEND_SERVICE_KEY;
+    if (svcKey) {
+      const provided = req.headers["x-service-key"];
+      if (provided !== svcKey) return sendJson(req, res, 403, { ok: false, error: "Forbidden" });
+    } else {
+      const u = await requireAuth(req, res);
+      if (!u) return;
+    }
+    const body = await readJson(req);
+    if (!body || !body.provider) return sendJson(req, res, 400, { ok: false, error: "Missing provider" });
+    getManager().sendToAgent({ type: "provider.linked", payload: body });
+    return sendJson(req, res, 200, { ok: true });
+  }
+
   // everything else requires auth
   const user = await requireAuth(req, res);
   if (!user) return;

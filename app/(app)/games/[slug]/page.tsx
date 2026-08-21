@@ -23,7 +23,7 @@ type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | 
 export default function GameDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress, linkProvider, providerLinked, installGuard, submitGuard } = useRuntime();
+  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress, providerLinked, isInstalled, isOwned, steamOwnedApps } = useRuntime();
   const [game, setGame] = useState<GameEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,15 +33,6 @@ export default function GameDetailsPage() {
   const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
   const [providerLogin, setProviderLogin] = useState<Record<string, { loggedIn: boolean; username?: string }>>({});
-  const [steamUser, setSteamUser] = useState("");
-  const [steamPass, setSteamPass] = useState("");
-  const [linking, setLinking] = useState(false);
-  const [guardCode, setGuardCode] = useState("");
-
-  // Clear the "Linking..." spinner as soon as we get a definitive result.
-  useEffect(() => {
-    if (linking && providerLinked?.steam) setLinking(false);
-  }, [linking, providerLinked?.steam]);
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -148,19 +139,6 @@ export default function GameDetailsPage() {
     cancelInstall(game.id);
   }, [game, cancelInstall]);
 
-  const handleLinkSteam = useCallback(() => {
-    if (!steamUser || !connected) return;
-    setLinking(true);
-    try {
-      linkProvider("steam", steamUser, steamPass);
-    } catch (e) {
-      console.error("linkProvider failed", e);
-    }
-    // keep linking state until we get a result (providerLinked updates)
-    // fallback timeout to avoid stuck state
-    setTimeout(() => setLinking(false), 15000);
-  }, [steamUser, steamPass, linkProvider, connected]);
-
   // Favorites (persisted in localStorage) + Share (copies a unique share URL)
   const [favorite, setFavorite] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -235,7 +213,21 @@ export default function GameDetailsPage() {
   const isRunning = runningGames.includes(game.id);
   const isLaunching = launchState !== "idle" && launchState !== "ready" && launchState !== "error";
   const install = installProgress[game.id];
-  const isInstalling = install && install.state !== "idle" && install.state !== "ready" && install.state !== "error";
+  const installState = install?.state;
+  const isInstallingNow =
+    installState === "requested" ||
+    installState === "checking" ||
+    installState === "downloading" ||
+    installState === "installing" ||
+    installState === "verifying";
+  const installed = isInstalled(game.id);
+  const appId = game.providers?.[0]?.appId;
+  const notOwned =
+    neededProvider === "steam" &&
+    !game.isFree &&
+    !!appId &&
+    steamOwnedApps.length > 0 &&
+    !isOwned(appId);
 
   const launchSteps = [
     { label: "Cloud runtime", status: (launchState === "starting_runtime" ? "active" : ["preparing_gpu","starting_stream","launching_game","connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
@@ -298,13 +290,14 @@ export default function GameDetailsPage() {
       )}
 
       {/* Install progress */}
-      {isInstalling && (
+      {(isInstallingNow || installState === "error") && (
         <section className="panel p-6">
           <h3 className="font-semibold text-lg mb-4">
-            {install.state === "checking" && "Checking for updates..."}
-            {install.state === "downloading" && `Downloading ${game.name}...`}
-            {install.state === "installing" && `Installing ${game.name}...`}
-            {install.state === "verifying" && "Verifying installation..."}
+            {installState === "requested" && "Starting installation..."}
+            {installState === "checking" && "Checking for updates..."}
+            {installState === "downloading" && `Downloading ${game.name}...`}
+            {installState === "installing" && `Installing ${game.name}...`}
+            {installState === "verifying" && "Verifying installation..."}
           </h3>
           <div className="flex flex-col gap-3">
             {/* Progress bar */}
@@ -339,77 +332,28 @@ export default function GameDetailsPage() {
         </section>
       )}
 
-      {/* Steam account (for protected/owned games) */}
+      {/* Steam account status — linking happens in the Provider section */}
       {neededProvider === "steam" && (
         <section className="panel p-6 mb-6">
-          <h3 className="font-semibold text-lg mb-1">Steam Account (required for cloud installs)</h3>
-          <p className="text-sm text-muted mb-4">
-            Your &ldquo;connected&rdquo; Steam above is OpenID (library sync only) and gives <b>no password</b> &mdash;
-            steamcmd cannot use it. Protected games like World of Warships must install under your real Steam login,
-            so enter your account credentials below. They&apos;re sent to the cloud PC and used only for the install.
-          </p>
           {providerLinked?.steam?.ok ? (
-            <p className="text-sm text-green-600">
-              ✓ Linked as <b>{providerLinked.steam.username}</b> &mdash; installs run under your account.
-            </p>
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <span>✓ Steam account linked</span>
+              <span className="text-muted">·</span>
+              <span className="text-text">{providerLinked.steam.username}</span>
+            </div>
           ) : (
-            <div className="flex flex-col gap-3">
-              {!connected && (
-                <p className="text-sm text-danger">Cloud PC not connected — start your session first before linking.</p>
-              )}
-              {providerLogin.steam?.loggedIn && (
-                <p className="text-xs text-muted">
-                  OpenID connected as <b>{providerLogin.steam.username}</b> &mdash; that&apos;s separate; still enter your
-                  Steam <b>login</b> username + password below.
-                </p>
-              )}
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="text"
-                  placeholder="Steam login username"
-                  value={steamUser}
-                  onChange={(e) => setSteamUser(e.target.value)}
-                  className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
-                />
-                <input
-                  type="password"
-                  placeholder="Steam password"
-                  value={steamPass}
-                  onChange={(e) => setSteamPass(e.target.value)}
-                  className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
-                />
-                <Button onClick={handleLinkSteam} disabled={!steamUser || linking || !connected}>
-                  {linking ? "Linking..." : "Link Account"}
-                </Button>
-              </div>
-              {providerLinked?.steam?.error && (
-                <p className="text-sm text-danger">{providerLinked.steam.error}</p>
-              )}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <p className="text-sm text-muted">
+                Link your Steam account to install owned games on your cloud PC.
+              </p>
+              <Link href="/providers" passHref>
+                <Button size="sm">Link Steam Account</Button>
+              </Link>
             </div>
           )}
-        </section>
-      )}
-
-      {/* Steam Guard (2FA) code prompt */}
-      {installGuard && (
-        <section className="panel p-6 mb-6 border-accent/40">
-          <h3 className="font-semibold text-lg mb-1">Steam Guard code required</h3>
-          <p className="text-sm text-muted mb-4">
-            Steam sent a Guard code to your email / authenticator. Enter it below to continue.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <input
-              type="text"
-              placeholder="Steam Guard code"
-              value={guardCode}
-              onChange={(e) => setGuardCode(e.target.value)}
-              className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
-              autoFocus
-            />
-            <Button onClick={() => { submitGuard(guardCode); setGuardCode(""); }} disabled={!guardCode}>
-              Submit Code
-            </Button>
-          </div>
+          {providerLinked?.steam?.error && (
+            <p className="text-sm text-danger mt-2">{providerLinked.steam.error}</p>
+          )}
         </section>
       )}
 
@@ -434,17 +378,21 @@ export default function GameDetailsPage() {
               </div>
             )}
             <div className="flex gap-3">
-              {game.installed || (install && install.state === "ready") ? (
+              {installed || installState === "ready" ? (
                 <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching}>
-                  {isRunning ? "● Running" : isLaunching ? "Starting..." : "Play Now"}
+                  {isRunning ? "● Running" : isLaunching ? "Starting..." : "Play"}
                 </Button>
-              ) : isInstalling ? (
+              ) : isInstallingNow ? (
                 <Button size="lg" variant="secondary" disabled>
-                  {install.state === "checking" ? "Checking..." : install.state === "downloading" ? `Downloading... ${Math.round(install.percent)}%` : install.state === "installing" ? "Installing..." : "Processing..."}
+                  {installState === "requested" ? "Starting installation..."
+                    : installState === "checking" ? "Checking for updates..."
+                    : installState === "downloading" ? `Downloading... ${Math.round(install?.percent || 0)}%`
+                    : installState === "installing" ? "Installing..."
+                    : "Verifying installation..."}
                 </Button>
               ) : game.isFree ? (
-                <Button size="lg" onClick={handleInstall} className="bg-green-600 hover:bg-green-700">
-                  Download Free
+                <Button size="lg" onClick={handleInstall}>
+                  Install
                 </Button>
               ) : providerConnected ? (
                 <Button size="lg" onClick={handleInstall}>
@@ -467,7 +415,7 @@ export default function GameDetailsPage() {
                   Stop Game
                 </Button>
               )}
-              {(game.installed || (install && install.state === "ready")) && !isRunning && install?.state !== "uninstalling" && (
+              {(installed || installState === "ready") && !isRunning && install?.state !== "uninstalling" && (
                 <Button size="lg" variant="secondary" onClick={handleUninstall}>
                   Uninstall
                 </Button>
@@ -480,7 +428,12 @@ export default function GameDetailsPage() {
             </div>
             {neededProvider === "steam" && !providerLinked?.steam?.ok && (
               <p className="text-xs text-muted mt-3">
-                Tip: link your Steam account above first so protected games install under your login.
+                Tip: link your Steam account in the Provider section so games install under your login.
+              </p>
+            )}
+            {notOwned && (
+              <p className="text-xs text-yellow-400 mt-2">
+                This game isn&apos;t in your linked Steam library — installation may fail if you don&apos;t own it.
               </p>
             )}
           </div>
@@ -571,7 +524,7 @@ export default function GameDetailsPage() {
               <InfoRow label="Resolution" value="Up to 1080p" />
               <InfoRow label="Target FPS" value="60" />
               <InfoRow label="Controller" value={game.controllerSupport === "full" ? "Full Support" : game.controllerSupport === "none" ? "Not Supported" : "Partial"} />
-              <InfoRow label="Status" value={game.installed || (install?.state === "ready") ? "✓ Installed" : isInstalling ? "⟳ Installing" : "○ Not Installed"} />
+              <InfoRow label="Status" value={installed || installState === "ready" ? "✓ Installed" : isInstallingNow ? "⟳ Installing" : "○ Not Installed"} />
               <InfoRow label="Size" value={game.downloadSize || "— GB"} />
             </div>
           </div>

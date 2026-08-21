@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GOG_CLIENT_ID = "46899977096215655";
-const GOG_CLIENT_SECRET = "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9";
-
 const STORE: Record<string, { userId: string; username: string; accessToken: string; refreshToken: string; games: any[]; connectedAt: string }> = {};
 
 export function getGogSession() {
   return STORE;
+}
+
+async function relayToBackend(payload: Record<string, unknown>) {
+  const backend = process.env.BACKEND_URL || "https://kyro-cloud-3fp0.onrender.com";
+  const key = process.env.BACKEND_SERVICE_KEY;
+  try {
+    await fetch(`${backend}/api/provider/link`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(key ? { "x-service-key": key } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // non-fatal: library sync still works via the stored session
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -19,15 +33,20 @@ export async function GET(req: NextRequest) {
 
   const origin = new URL(req.url).origin;
   const redirectUri = `${origin}/api/providers/gog/callback`;
+  const clientId = process.env.GOG_CLIENT_ID;
+  const clientSecret = process.env.GOG_CLIENT_SECRET || "";
+
+  if (!clientId || !clientSecret) {
+    return NextResponse.redirect(new URL("/providers?error=gog_not_configured", req.url));
+  }
 
   try {
-    // Exchange code for token — GOG requires client_secret
     const tokenRes = await fetch("https://auth.gog.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: GOG_CLIENT_ID,
-        client_secret: GOG_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         grant_type: "authorization_code",
         code,
         redirect_uri: redirectUri,
@@ -40,7 +59,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(new URL("/providers?error=gog_token_exchange_failed", req.url));
     }
 
-    // Fetch user profile
     const profileRes = await fetch("https://embed.gog.com/userData.json", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
@@ -61,7 +79,6 @@ export async function GET(req: NextRequest) {
       }
     } catch {}
 
-    // Fetch game details to get names
     if (games.length > 0) {
       try {
         const detailsRes = await fetch("https://embed.gog.com/account/getFilteredProducts?mediaType=1&page=1", {
@@ -86,6 +103,15 @@ export async function GET(req: NextRequest) {
       games,
       connectedAt: new Date().toISOString(),
     };
+
+    // Relay the linked account to the cloud agent so games install under this GOG user.
+    await relayToBackend({
+      provider: "gog",
+      accountId: userId,
+      username,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token || "",
+    });
 
     const response = NextResponse.redirect(new URL("/providers?success=gog", req.url));
     response.cookies.set("provider_gog", JSON.stringify(STORE[userId]), {

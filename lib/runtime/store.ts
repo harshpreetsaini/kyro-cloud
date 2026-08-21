@@ -48,6 +48,7 @@ interface RuntimeState {
   steamCreds: { user: string; pass: string } | null;
   installGuard: string | null;
   installedGames: Record<string, boolean>;
+  steamOwnedApps: string[];
 }
 
 const EMPTY: RuntimeState = {
@@ -65,6 +66,7 @@ const EMPTY: RuntimeState = {
   steamCreds: null,
   installGuard: null,
   installedGames: {},
+  steamOwnedApps: [],
 };
 
 let state: RuntimeState = EMPTY;
@@ -104,6 +106,12 @@ function markInstalled(id: string) {
 
 export function isInstalled(id: string) {
   return !!state.installedGames[id];
+}
+
+export function isOwned(appId: string | number | undefined) {
+  if (!appId) return false;
+  const a = String(appId);
+  return state.steamOwnedApps.includes(a);
 }
 
 // Persist only the *linked username* (never the password) so the UI stays
@@ -325,6 +333,14 @@ function connect() {
         emit();
         break;
       }
+      case "provider.entitlement": {
+        const p = event.payload as { provider?: string; username?: string; appIds?: string[] };
+        if (p.provider === "steam" && Array.isArray(p.appIds)) {
+          state = { ...state, steamOwnedApps: p.appIds.map(String) };
+          emit();
+        }
+        break;
+      }
       default:
         break;
     }
@@ -374,12 +390,12 @@ export function runtimeInstallGame(id: string) {
     provider?.launchMethod === "gog" ? "lgogdownloader" : "steamcmd";
   const appId = provider?.appId || provider?.steamAppId || id?.replace(/\D/g, "");
 
-  // Set local installing state immediately
+  // Set local installing state immediately (backend will confirm shortly)
   state = {
     ...state,
     installProgress: {
       ...state.installProgress,
-      [id]: { gameId: id, state: "checking", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 },
+      [id]: { gameId: id, state: "requested", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 },
     },
   };
   emit();
