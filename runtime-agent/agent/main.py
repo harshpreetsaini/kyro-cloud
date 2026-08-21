@@ -728,11 +728,18 @@ def main():
                 on_close=on_close,
             )
             # Enable TCP_NODELAY for zero-latency control messages
-            ws.run_forever(
-                ping_interval=0,
-                suppress_origin=True,
-                socket={"no_delay": True},
-            )
+            try:
+                ws.run_forever(
+                    ping_interval=0,
+                    suppress_origin=True,
+                    socket_options=[(6, 1, 1)],  # (SOL_TCP, TCP_NODELAY, 1)
+                )
+            except TypeError:
+                # Fallback for older websocket-client versions without socket_options
+                ws.run_forever(
+                    ping_interval=0,
+                    suppress_origin=True,
+                )
             attempt = 0  # reset on clean disconnect
         except Exception as e:
             print(f"[agent] connection failed: {e}", flush=True)
