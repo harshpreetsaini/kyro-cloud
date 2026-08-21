@@ -52,8 +52,9 @@ export interface SystemStats {
   vramTotalMb: number | null;
   fps: number | null;
   frameTimeMs: number | null;
-  latencyMs: number | null;
-  latencySource?: "control" | "webrtc" | "agent" | null;
+  latencyMs?: number | null;
+  latencySource?: "control" | "webrtc" | "agent" | "browser" | null;
+  agentLatencyMs?: number | null;
   bitrateMbps: number | null;
   streaming: boolean;
   netUpBps?: number | null;

@@ -34,11 +34,27 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 echo "[bootstrap] installing steamcmd..." >> /tmp/luna-agent.log
 dpkg --add-architecture i386 2>/dev/null || true
+add-apt-repository -y multiverse 2>/dev/null || true
 DEBIAN_FRONTEND=noninteractive apt-get update -y 2>/dev/null || true
-DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd 2>/dev/null || true
-if ! command -v steamcmd >/dev/null 2>&1; then
-  echo "deb http://repo.steampowered.com/steam/ stable steam" > /etc/apt/sources.list.d/steam.list
-  curl -fsSL https://steamcdn-a.akamai.net/client/installer/steamcmd_linux.tar.gz | tar -xzf - -C /usr/local/bin/ 2>/dev/null || true
+# 32-bit libraries required by the steamcmd binary
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  lib32gcc-s1 lib32stdc++6 libc6-i386 lib32z1 \
+  libcurl4:i386 libnss3:i386 2>/dev/null || true
+# Primary: official Valve tarball (predictable, no interactive license prompts)
+mkdir -p /opt/steamcmd
+if [ ! -x /opt/steamcmd/steamcmd.sh ]; then
+  curl -fsSL "https://steamcdn-a.akamai.net/client/installer/steamcmd_linux.tar.gz" -o /tmp/steamcmd.tar.gz 2>/dev/null \
+    || curl -fsSL "https://partner.steamgames.com/download/steamcmd_linux.tar.gz" -o /tmp/steamcmd.tar.gz 2>/dev/null
+  if [ -f /tmp/steamcmd.tar.gz ]; then
+    tar -xzf /tmp/steamcmd.tar.gz -C /opt/steamcmd 2>/dev/null && echo "[bootstrap] steamcmd tarball extracted" >> /tmp/luna-agent.log
+  fi
+fi
+# Fallback: apt package (multiverse)
+if [ ! -x /opt/steamcmd/steamcmd.sh ]; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd 2>/dev/null || true
+  if [ -x /usr/lib/games/steam/steamcmd.sh ]; then
+    ln -sf /usr/lib/games/steam/steamcmd.sh /opt/steamcmd/steamcmd.sh 2>/dev/null || true
+  fi
 fi
 
 echo "[bootstrap] installing GStreamer..." >> /tmp/luna-agent.log
@@ -100,6 +116,29 @@ fi
 usermod -aG video,audio,gamer gamer 2>/dev/null || true
 mkdir -p /home/gamer/.config /home/gamer/.cache
 chown -R gamer:gamer /home/gamer 2>/dev/null || true
+
+# steamcmd refuses to run as root — wrap it to drop privileges to 'gamer'
+# and use a gamer-writable data + install directory.
+if [ -x /opt/steamcmd/steamcmd.sh ] || [ -x /usr/lib/games/steam/steamcmd.sh ]; then
+  mkdir -p /home/gamer/.steam /home/gamer/games
+  chown -R gamer:gamer /home/gamer/.steam /home/gamer/games /opt/steamcmd 2>/dev/null || true
+  cat > /usr/local/bin/steamcmd <<'WRAP'
+#!/usr/bin/env bash
+export HOME=/home/gamer
+export STEAMCMD_DIR=/home/gamer/.steam
+REAL=/opt/steamcmd/steamcmd.sh
+[ -x "$REAL" ] || REAL=/usr/lib/games/steam/steamcmd.sh
+mkdir -p "$HOME/.steam" /home/gamer/games
+if command -v runuser >/dev/null 2>&1; then
+  exec runuser -u gamer -- "$REAL" "$@"
+else
+  exec su gamer -s /bin/bash -c 'exec "$0" "$@"' "$REAL" "$@"
+fi
+WRAP
+  chmod +x /usr/local/bin/steamcmd
+  ln -sf /usr/local/bin/steamcmd /usr/bin/steamcmd 2>/dev/null || true
+  echo "[bootstrap] steamcmd wrapper installed (runs as gamer)" >> /tmp/luna-agent.log
+fi
 
 echo "[bootstrap] verifying components:" >> /tmp/luna-agent.log
 for b in Xvfb x11vnc openbox steamcmd gst-launch-1.0; do

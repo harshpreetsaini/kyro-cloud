@@ -183,6 +183,7 @@ function NetworkCard({ systemInfo, stats }: { systemInfo: any; stats: any }) {
       </div>
       <div className="flex flex-col">
         <InfoRow label="Latency" value={stats?.latencyMs != null ? `${Math.round(stats.latencyMs)} ms` : net?.pingMs != null ? `${Math.round(net.pingMs)} ms` : null} />
+        <InfoRow label="Cloud PC Latency" value={stats?.agentLatencyMs != null ? `${Math.round(stats.agentLatencyMs)} ms` : null} />
         <InfoRow label="Bitrate" value={stats?.bitrateMbps != null ? `${stats.bitrateMbps.toFixed(1)} Mbps` : null} />
         <InfoRow label="Upload" value={net?.upBps ? `${(net.upBps / 1024 / 1024).toFixed(1)} Mbps` : null} />
         <InfoRow label="Download" value={net?.downBps ? `${(net.downBps / 1024 / 1024).toFixed(1)} Mbps` : null} />

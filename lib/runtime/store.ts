@@ -94,13 +94,13 @@ function connect() {
     state = { ...state, connected: true };
     retry = 0;
     emit();
-    // Send keepalive ping every 30 seconds to prevent disconnection
+    // Send keepalive ping every 10 seconds (also measures browser→backend latency)
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
       }
-    }, 30000);
+    }, 10000);
   };
   ws.onclose = () => {
     state = { ...state, connected: false };
@@ -145,11 +145,25 @@ function connect() {
       case "system.stats":
         state = {
           ...state,
-          stats: event.payload as SystemStats,
+          stats: { ...(state.stats || {}), ...(event.payload as SystemStats) },
           statsHistory: [...state.statsHistory.slice(-59), event.payload as SystemStats],
         };
         emit();
         break;
+      case "pong": {
+        // Frontend→backend round-trip latency (the user-facing control latency).
+        // The backend→Colab leg is reported separately as agentLatencyMs.
+        const ts = (event.payload as { ts?: number })?.ts;
+        if (typeof ts === "number") {
+          const rtt = Math.max(0, Date.now() - ts);
+          state = {
+            ...state,
+            stats: { ...(state.stats || {}), latencyMs: rtt, latencySource: "browser" } as SystemStats,
+          };
+          emit();
+        }
+        break;
+      }
       case "stream.status":
         state = { ...state, stream: event.payload as StreamClientConfig };
         emit();

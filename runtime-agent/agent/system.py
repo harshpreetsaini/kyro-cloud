@@ -66,17 +66,21 @@ def _net_rates():
         _net_rates._prev = (now, cur.bytes_sent, cur.bytes_recv)
 
         total_bps = up + down
-        if total_bps > 5_000_000:
-            quality = "excellent"
-        elif total_bps > 1_000_000:
+        # Quality reflects connection health, not raw idle throughput.
+        # The control WebSocket always has some tiny traffic — that is healthy,
+        # not "poor". Only sustained low/zero throughput with a dead link is bad.
+        if total_bps == 0:
+            # No traffic at all this interval but the agent is connected & reporting
             quality = "good"
-        elif total_bps > 200_000:
+        elif total_bps < 200_000:
+            # Control-channel only (keepalives, status) — connection is healthy
+            quality = "good"
+        elif total_bps < 1_000_000:
             quality = "fair"
-        elif total_bps > 0:
-            quality = "poor"
-        else:
-            # Idle but the agent is connected and reporting — connection is healthy
+        elif total_bps < 5_000_000:
             quality = "good"
+        else:
+            quality = "excellent"
 
         return {
             "upBps": round(up, 1),
@@ -143,8 +147,11 @@ def collect_stats() -> dict:
         stats["netState"] = nr["state"]
         stats["quality"] = nr["quality"]
 
-        if nr["downBps"] and nr["downBps"] > 0:
-            stats["bitrateMbps"] = round(nr["downBps"] * 8 / 1_000_000, 2)
+        # During streaming the video is the agent's UPLOAD (agent -> backend).
+        # Use the larger of up/down so the stream bitrate is reported correctly.
+        stream_bps = max(nr["upBps"] or 0, nr["downBps"] or 0)
+        if stream_bps > 0:
+            stats["bitrateMbps"] = round(stream_bps * 8 / 1_000_000, 2)
         else:
             stats["bitrateMbps"] = None
 
