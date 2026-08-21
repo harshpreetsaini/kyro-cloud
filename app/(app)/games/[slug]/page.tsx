@@ -144,11 +144,17 @@ export default function GameDetailsPage() {
   }, [game, cancelInstall]);
 
   const handleLinkSteam = useCallback(() => {
-    if (!steamUser) return;
+    if (!steamUser || !connected) return;
     setLinking(true);
-    linkProvider("steam", steamUser, steamPass);
-    setTimeout(() => setLinking(false), 2000);
-  }, [steamUser, steamPass, linkProvider]);
+    try {
+      linkProvider("steam", steamUser, steamPass);
+    } catch (e) {
+      console.error("linkProvider failed", e);
+    }
+    // keep linking state until we get a result (providerLinked updates)
+    // fallback timeout to avoid stuck state
+    setTimeout(() => setLinking(false), 15000);
+  }, [steamUser, steamPass, linkProvider, connected]);
 
   // Favorites (persisted in localStorage) + Share (copies a unique share URL)
   const [favorite, setFavorite] = useState(false);
@@ -343,6 +349,9 @@ export default function GameDetailsPage() {
             </p>
           ) : (
             <div className="flex flex-col gap-3">
+              {!connected && (
+                <p className="text-sm text-danger">Cloud PC not connected — start your session first before linking.</p>
+              )}
               {providerLogin.steam?.loggedIn && (
                 <p className="text-xs text-muted">
                   OpenID connected as <b>{providerLogin.steam.username}</b> &mdash; that&apos;s separate; still enter your
@@ -364,7 +373,7 @@ export default function GameDetailsPage() {
                   onChange={(e) => setSteamPass(e.target.value)}
                   className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
                 />
-                <Button onClick={handleLinkSteam} disabled={!steamUser || linking}>
+                <Button onClick={handleLinkSteam} disabled={!steamUser || linking || !connected}>
                   {linking ? "Linking..." : "Link Account"}
                 </Button>
               </div>
