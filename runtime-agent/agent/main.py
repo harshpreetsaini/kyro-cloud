@@ -285,8 +285,9 @@ def _keepalive_loop(ws, gen):
             return
         try:
             send(ws, "ping", {"ts": int(time.time() * 1000)})
-        except Exception:
-            print("[agent] keepalive send failed — connection may be dead")
+            print(f"[agent] ping sent (connected={getattr(ws, 'connected', None)})", flush=True)
+        except Exception as ex:
+            print(f"[agent] keepalive send failed ({ex}) — connection may be dead", flush=True)
             _force_close(ws)
             return
         if time.time() - _last_pong["t"] > PING_TIMEOUT:
@@ -506,6 +507,7 @@ def on_message(ws, raw):
         _terminal_procs.clear()
     elif t == "pong":
         _last_pong["t"] = time.time()
+        print("[agent] pong received", flush=True)
     elif t == "ping":
         send(ws, "pong", {})
     elif t == "steam.guard.code":
