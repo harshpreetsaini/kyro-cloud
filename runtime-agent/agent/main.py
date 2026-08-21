@@ -542,8 +542,7 @@ def _provider_login(ws, p):
                 err = None
                 try:
                     cmd = ["steamcmd", "+login", username, password]
-                    if _has_stdbuf():
-                        cmd = ["stdbuf", "-oL", "-eL"] + cmd
+                    cmd = _wrap_steamcmd(cmd)
                     proc = subprocess.Popen(
                         cmd,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -775,8 +774,7 @@ def _game_install(ws, p):
                       ["+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
                 cmd_buf = ["steamcmd", "+force_install_dir", install_dir] + login_args + ["+app_update", str(app_id), "validate", "+quit"]
-                if _has_stdbuf():
-                    cmd_buf = ["stdbuf", "-oL", "-eL"] + cmd_buf
+                cmd_buf = _wrap_steamcmd(cmd_buf)
                 proc = subprocess.Popen(cmd_buf, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
@@ -923,6 +921,23 @@ def on_close(ws, close_status_code, close_msg):
 def _has_stdbuf():
     # stdbuf breaks 32-bit steamcmd via LD_PRELOAD mismatch, so always disable it
     return False
+
+
+import shlex
+import shutil as _shutil
+
+def _has_script():
+    return _shutil.which("script") is not None
+
+
+def _wrap_steamcmd(cmd_list):
+    """Run steamcmd under a PTY (via `script`) so its stdout is line-buffered.
+    Plain pipes block-buffer, so the Guard prompt never reaches the agent.
+    `script -qc '<cmd>' /dev/null` allocates a PTY for the child."""
+    cmd_str = " ".join(shlex.quote(x) for x in cmd_list)
+    if _has_script():
+        return ["script", "-qc", cmd_str, "/dev/null"]
+    return cmd_list
 
 def _self_update_codebase():
     """Best-effort pull of the runtime-agent repo so the Colab agent auto-advances."""
