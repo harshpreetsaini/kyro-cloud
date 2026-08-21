@@ -502,6 +502,15 @@ def _provider_login(ws, p):
             if provider == "steam":
                 result = subprocess.run(["steamcmd", "+login", username, password, "+quit"], capture_output=True, text=True, timeout=120)
                 ok = "Steam account successfully logged in" in result.stdout or result.returncode == 0
+                if ok:
+                    # Persist credentials so game installs run under this account
+                    try:
+                        auth_dir = os.path.join(os.path.dirname(__file__), ".auth")
+                        os.makedirs(auth_dir, exist_ok=True)
+                        with open(os.path.join(auth_dir, "steam_auth.txt"), "w") as f:
+                            f.write(f"{username}:{password}")
+                    except Exception:
+                        pass
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else result.stdout[-500:]})
             elif provider == "epic":
                 subprocess.run(["pip", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
@@ -536,7 +545,10 @@ def _provider_sync(ws, p):
         try:
             games = []
             if provider == "steam":
-                login_user = steam_id or auth_code or "anonymous"
+                sync_user = auth_code
+                if ":" in auth_code:
+                    sync_user = auth_code.split(":", 1)[0]
+                login_user = steam_id or sync_user or "anonymous"
                 result = subprocess.run(["steamcmd", "+login", login_user, "+apps_list", "+quit"], capture_output=True, text=True, timeout=120)
                 for line in result.stdout.split("\n"):
                     line = line.strip()
@@ -657,12 +669,20 @@ def _game_install(ws, p):
 
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
-                login_user = auth_code if auth_code else "anonymous"
+                # auth_code is "username:password" from .auth/steam_auth.txt
+                auth_user = auth_code
+                auth_pass = ""
+                if ":" in auth_code:
+                    auth_user, auth_pass = auth_code.split(":", 1)
+                login_user = auth_user if auth_user else "anonymous"
+                login_args = ["+login", login_user]
+                if auth_pass:
+                    login_args.append(auth_pass)
                 print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
                 # force_install_dir MUST come before +login, otherwise steamcmd
                 # errors with "Please use force_install_dir before logon!"
-                cmd = ["steamcmd", "+force_install_dir", install_dir, "+login", login_user,
-                       "+app_update", str(app_id), "validate", "+quit"]
+                cmd = ["steamcmd", "+force_install_dir", install_dir] + login_args + \
+                      ["+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 _install_proc = proc

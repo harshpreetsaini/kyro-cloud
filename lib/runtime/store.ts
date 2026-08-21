@@ -44,6 +44,7 @@ interface RuntimeState {
   runningGames: string[];
   apps: Record<string, AppEntry>;
   installProgress: Record<string, InstallProgress>;
+  providerLinked: Record<string, { ok: boolean; username?: string; error?: string }>;
 }
 
 const EMPTY: RuntimeState = {
@@ -57,6 +58,7 @@ const EMPTY: RuntimeState = {
   runningGames: [],
   apps: {},
   installProgress: {},
+  providerLinked: {},
 };
 
 let state: RuntimeState = EMPTY;
@@ -244,6 +246,18 @@ function connect() {
         emit();
         break;
       }
+      case "provider.login.result": {
+        const p = event.payload as { provider: string; ok: boolean; username?: string; error?: string };
+        state = {
+          ...state,
+          providerLinked: {
+            ...state.providerLinked,
+            [p.provider]: { ok: p.ok, username: p.ok ? p.username : undefined, error: p.ok ? undefined : p.error },
+          },
+        };
+        emit();
+        break;
+      }
       default:
         break;
     }
@@ -265,6 +279,10 @@ export function runtimeLaunchGame(id: string) {
     headers: { "content-type": "application/json", ...authHeader() },
     body: JSON.stringify({ id }),
   });
+}
+
+export function runtimeLinkProvider(provider: string, username: string, password: string) {
+  runtimeSend("provider.login", { provider, username, password });
 }
 
 export function runtimeInstallGame(id: string) {

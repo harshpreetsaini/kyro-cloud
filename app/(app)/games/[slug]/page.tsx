@@ -23,7 +23,7 @@ type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | 
 export default function GameDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress } = useRuntime();
+  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress, linkProvider, providerLinked } = useRuntime();
   const [game, setGame] = useState<GameEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +33,9 @@ export default function GameDetailsPage() {
   const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
   const [providerLogin, setProviderLogin] = useState<Record<string, boolean>>({});
+  const [steamUser, setSteamUser] = useState("");
+  const [steamPass, setSteamPass] = useState("");
+  const [linking, setLinking] = useState(false);
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -137,6 +140,13 @@ export default function GameDetailsPage() {
     if (!game) return;
     cancelInstall(game.id);
   }, [game, cancelInstall]);
+
+  const handleLinkSteam = useCallback(() => {
+    if (!steamUser) return;
+    setLinking(true);
+    linkProvider("steam", steamUser, steamPass);
+    setTimeout(() => setLinking(false), 2000);
+  }, [steamUser, steamPass, linkProvider]);
 
   // Favorites (persisted in localStorage) + Share (copies a unique share URL)
   const [favorite, setFavorite] = useState(false);
@@ -316,6 +326,47 @@ export default function GameDetailsPage() {
         </section>
       )}
 
+      {/* Steam account (for protected/owned games) */}
+      {neededProvider === "steam" && (
+        <section className="panel p-6 mb-6">
+          <h3 className="font-semibold text-lg mb-1">Steam Account</h3>
+          <p className="text-sm text-muted mb-4">
+            Protected games like World of Warships require your own Steam account (anonymous can&apos;t download them).
+            The cloud PC installs them under your login — your OpenID connection above is not used here.
+          </p>
+          {providerLinked?.steam?.ok ? (
+            <p className="text-sm text-green-600">
+              ✓ Linked as <b>{providerLinked.steam.username}</b> — installs run under your account.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="text"
+                  placeholder="Steam username"
+                  value={steamUser}
+                  onChange={(e) => setSteamUser(e.target.value)}
+                  className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
+                />
+                <input
+                  type="password"
+                  placeholder="Steam password"
+                  value={steamPass}
+                  onChange={(e) => setSteamPass(e.target.value)}
+                  className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
+                />
+                <Button onClick={handleLinkSteam} disabled={!steamUser || linking}>
+                  {linking ? "Linking..." : "Link Account"}
+                </Button>
+              </div>
+              {providerLinked?.steam?.error && (
+                <p className="text-sm text-danger">{providerLinked.steam.error}</p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Error */}
       {launchState === "error" && (
         <section className="panel p-6 border-danger/30">
@@ -381,6 +432,11 @@ export default function GameDetailsPage() {
                 </Button>
               )}
             </div>
+            {neededProvider === "steam" && !providerLinked?.steam?.ok && (
+              <p className="text-xs text-muted mt-3">
+                Tip: link your Steam account above first so protected games install under your login.
+              </p>
+            )}
           </div>
 
           {/* About */}
