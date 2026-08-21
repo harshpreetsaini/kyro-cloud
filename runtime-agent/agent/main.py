@@ -541,8 +541,11 @@ def _provider_login(ws, p):
                 ok = False
                 err = None
                 try:
+                    cmd = ["steamcmd", "+login", username, password]
+                    if _has_stdbuf():
+                        cmd = ["stdbuf", "-oL", "-eL"] + cmd
                     proc = subprocess.Popen(
-                        ["stdbuf", "-oL", "-eL", "steamcmd", "+login", username, password],
+                        cmd,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
                     gseq = [0]
@@ -771,7 +774,10 @@ def _game_install(ws, p):
                 cmd = ["steamcmd", "+force_install_dir", install_dir] + login_args + \
                       ["+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
-                proc = subprocess.Popen(["stdbuf", "-oL", "-eL"] + cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                cmd_buf = ["steamcmd", "+force_install_dir", install_dir] + login_args + ["+app_update", str(app_id), "validate", "+quit"]
+                if _has_stdbuf():
+                    cmd_buf = ["stdbuf", "-oL", "-eL"] + cmd_buf
+                proc = subprocess.Popen(cmd_buf, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
@@ -914,6 +920,9 @@ def on_close(ws, close_status_code, close_msg):
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────
+def _has_stdbuf():
+    return __import__("shutil").which("stdbuf") is not None
+
 def _self_update_codebase():
     """Best-effort pull of the runtime-agent repo so the Colab agent auto-advances."""
     try:
