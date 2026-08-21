@@ -23,7 +23,7 @@ type LaunchState = "idle" | "checking" | "starting_runtime" | "preparing_gpu" | 
 export default function GameDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress, linkProvider, providerLinked } = useRuntime();
+  const { launchGame, stopGame, installGame, uninstallGame, cancelInstall, runningGames, session, connected, installProgress, linkProvider, providerLinked, installGuard, submitGuard } = useRuntime();
   const [game, setGame] = useState<GameEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +36,7 @@ export default function GameDetailsPage() {
   const [steamUser, setSteamUser] = useState("");
   const [steamPass, setSteamPass] = useState("");
   const [linking, setLinking] = useState(false);
+  const [guardCode, setGuardCode] = useState("");
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -372,6 +373,29 @@ export default function GameDetailsPage() {
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {/* Steam Guard (2FA) code prompt */}
+      {installGuard && (
+        <section className="panel p-6 mb-6 border-accent/40">
+          <h3 className="font-semibold text-lg mb-1">Steam Guard code required</h3>
+          <p className="text-sm text-muted mb-4">
+            Steam sent a Guard code to your email / authenticator. Enter it below to continue.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              placeholder="Steam Guard code"
+              value={guardCode}
+              onChange={(e) => setGuardCode(e.target.value)}
+              className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent flex-1"
+              autoFocus
+            />
+            <Button onClick={() => { submitGuard(guardCode); setGuardCode(""); }} disabled={!guardCode}>
+              Submit Code
+            </Button>
+          </div>
         </section>
       )}
 

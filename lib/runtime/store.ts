@@ -46,6 +46,7 @@ interface RuntimeState {
   installProgress: Record<string, InstallProgress>;
   providerLinked: Record<string, { ok: boolean; username?: string; error?: string }>;
   steamCreds: { user: string; pass: string } | null;
+  installGuard: string | null;
 }
 
 const EMPTY: RuntimeState = {
@@ -61,6 +62,7 @@ const EMPTY: RuntimeState = {
   installProgress: {},
   providerLinked: {},
   steamCreds: null,
+  installGuard: null,
 };
 
 let state: RuntimeState = EMPTY;
@@ -260,6 +262,12 @@ function connect() {
         emit();
         break;
       }
+      case "steam.guard": {
+        const p = event.payload as { requestId: string };
+        state = { ...state, installGuard: p.requestId || null };
+        emit();
+        break;
+      }
       default:
         break;
     }
@@ -289,6 +297,13 @@ export function runtimeLinkProvider(provider: string, username: string, password
     emit();
   }
   runtimeSend("provider.login", { provider, username, password });
+}
+
+export function runtimeSubmitGuard(code: string) {
+  const rid = state.installGuard;
+  if (rid) runtimeSend("steam.guard.code", { requestId: rid, code });
+  state = { ...state, installGuard: null };
+  emit();
 }
 
 export function runtimeInstallGame(id: string) {

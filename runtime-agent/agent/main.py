@@ -31,6 +31,8 @@ _agent_pids = []
 _install_proc = None  # Currently running install subprocess (for cancellation)
 _install_cancel = threading.Event()
 _lock = threading.Lock()  # Protects _terminal_procs, _agent_pids
+_send_lock = threading.Lock()  # Serializes websocket sends across threads
+_steam_guard = {}  # requestId -> {"event": Event, "code": str}
 
 
 def url() -> str:
@@ -40,7 +42,8 @@ def url() -> str:
 
 def send(ws, type_: str, payload=None):
     try:
-        ws.send(json.dumps({"type": type_, "payload": payload}))
+        with _send_lock:
+            ws.send(json.dumps({"type": type_, "payload": payload}))
     except websocket.WebSocketConnectionClosedException:
         print(f"[agent] send failed: connection closed (type={type_})")
     except Exception as e:
@@ -51,6 +54,21 @@ def agent_send(type_: str, payload=None):
     """Send to the active backend websocket (set by on_open)."""
     if _ws is not None:
         send(_ws, type_, payload)
+
+
+_GUARD_SEQ = [0]
+
+
+def _request_steam_guard(request_prefix: str, timeout: int = 180) -> str:
+    """Ask the frontend for a Steam Guard code and block until it arrives."""
+    _GUARD_SEQ[0] += 1
+    rid = f"{request_prefix}-{_GUARD_SEQ[0]}"
+    ev = threading.Event()
+    _steam_guard[rid] = {"event": ev, "code": ""}
+    agent_send("steam.guard", {"requestId": rid})
+    ev.wait(timeout=timeout)
+    rec = _steam_guard.pop(rid, {"code": ""})
+    return (rec.get("code") or "").strip()
 
 
 def _start_stats(ws, gen):
@@ -244,7 +262,9 @@ def on_message(ws, raw):
     elif t == "provider.logout":
         _provider_logout(ws, p)
     elif t == "game.install":
-        _game_install(ws, p)
+        # Run in a background thread so the WS loop stays responsive
+        # (e.g. to receive the Steam Guard code mid-login).
+        threading.Thread(target=_game_install, args=(ws, p), daemon=True).start()
     elif t == "game.uninstall":
         _game_uninstall(ws, p)
     elif t == "game.install.cancel":
@@ -268,6 +288,12 @@ def on_message(ws, raw):
         _last_pong["t"] = time.time()
     elif t == "ping":
         send(ws, "pong", {})
+    elif t == "steam.guard.code":
+        rid = p.get("requestId")
+        rec = _steam_guard.get(rid)
+        if rec:
+            rec["code"] = p.get("code", "")
+            rec["event"].set()
 
 
 # ── Terminal / Files / Clipboard (unchanged) ───────────────────────────
@@ -500,8 +526,45 @@ def _provider_login(ws, p):
     def _do_login():
         try:
             if provider == "steam":
-                result = subprocess.run(["steamcmd", "+login", username, password, "+quit"], capture_output=True, text=True, timeout=120)
-                ok = "Steam account successfully logged in" in result.stdout or result.returncode == 0
+                import subprocess
+                ok = False
+                err = None
+                try:
+                    proc = subprocess.Popen(
+                        ["steamcmd", "+login", username, password],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    gseq = [0]
+                    for line in proc.stdout:
+                        if "Steam account successfully logged in" in line:
+                            ok = True
+                            break
+                        lo = line.lower()
+                        if "steam guard code" in lo:
+                            gseq[0] += 1
+                            code = _request_steam_guard(f"login-{username}")
+                            if code and proc.stdin:
+                                try:
+                                    proc.stdin.write(code + "\n")
+                                    proc.stdin.flush()
+                                except Exception:
+                                    pass
+                            continue
+                    try:
+                        if proc.stdin:
+                            proc.stdin.write("+quit\n")
+                            proc.stdin.flush()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=30)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                except Exception as ex:
+                    err = str(ex)
                 if ok:
                     # Persist credentials so game installs run under this account
                     try:
@@ -511,7 +574,7 @@ def _provider_login(ws, p):
                             f.write(f"{username}:{password}")
                     except Exception:
                         pass
-                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else result.stdout[-500:]})
+                send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else (err or "Login failed — check credentials or Steam Guard code")})
             elif provider == "epic":
                 subprocess.run(["pip", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
                 result = subprocess.run(["legendary", "auth", "--code", username], capture_output=True, text=True, timeout=60)
@@ -697,10 +760,11 @@ def _game_install(ws, p):
                 cmd = ["steamcmd", "+force_install_dir", install_dir] + login_args + \
                       ["+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
+                _guard_seq = [0]
                 for line in proc.stdout:
                     try:
                         logf.write(line); logf.flush()
@@ -711,6 +775,17 @@ def _game_install(ws, p):
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
+                    # Steam Guard (2FA) code requested — ask the user and feed it back
+                    if "steam guard code" in lo:
+                        _guard_seq[0] += 1
+                        code = _request_steam_guard(f"install-{game_id}")
+                        if code and proc.stdin:
+                            try:
+                                proc.stdin.write(code + "\n")
+                                proc.stdin.flush()
+                            except Exception:
+                                pass
+                        continue
                     dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
                     if dl_match:
                         downloaded = int(dl_match.group(1).replace(',', ''))
