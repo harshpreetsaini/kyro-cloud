@@ -914,8 +914,22 @@ def on_close(ws, close_status_code, close_msg):
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────
+def _self_update_codebase():
+    """Best-effort pull of the runtime-agent repo so the Colab agent auto-advances."""
+    try:
+        cwd = os.path.dirname(os.path.abspath(__file__))
+        repo = os.path.abspath(os.path.join(cwd, ".."))
+        if os.path.isdir(os.path.join(repo, ".git")):
+            subprocess = __import__("subprocess")
+            subprocess.run(["git", "fetch", "--quiet"], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "pull", "--quiet", "--ff-only"], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[agent] codebase self-updated", flush=True)
+    except Exception as e:
+        print(f"[agent] self-update skipped: {e}")
+
 def main():
     global _running
+    _self_update_codebase()
 
     def _handle_signal(signum, frame):
         print(f"[agent] received signal {signum}, shutting down...")
