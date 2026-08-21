@@ -19,6 +19,7 @@ RECONNECT_BASE = int(os.environ.get("LUNA_RECONNECT", "5"))
 RECONNECT_MAX = 60
 STATS_INTERVAL = 2
 PING_INTERVAL = 15
+PING_TIMEOUT = 30
 
 _running = True
 _session_active = False
@@ -73,17 +74,40 @@ def _start_stats(ws, gen):
     threading.Thread(target=_loop, daemon=True).start()
 
 
-# ── Keepalive ping (detects dead sockets proactively) ─────────────────
+# ── Keepalive / watchdog (detects dead sockets proactively) ──────────
+_last_pong = {"t": 0.0}
+
+def _force_close(ws):
+    """Force the underlying socket closed so run_forever exits and the
+    agent's reconnect loop kicks in."""
+    try:
+        ws.close()
+    except Exception:
+        pass
+    try:
+        if getattr(ws, "sock", None):
+            ws.sock.close()
+    except Exception:
+        pass
+
 def _keepalive_loop(ws, gen):
-    """Send pings every PING_INTERVAL seconds. If send fails, socket is dead."""
+    """Send application-level pings; if no pong arrives within PING_TIMEOUT,
+    force the socket closed so run_forever exits and the agent reconnects."""
+    global _last_pong
+    _last_pong["t"] = time.time()
     while _running and _ws_gen == gen:
         time.sleep(PING_INTERVAL)
         if _ws_gen != gen:
             return
         try:
-            ws.ping()
+            send(ws, "ping", {"ts": int(time.time() * 1000)})
         except Exception:
-            print("[agent] keepalive ping failed — connection may be dead")
+            print("[agent] keepalive send failed — connection may be dead")
+            _force_close(ws)
+            return
+        if time.time() - _last_pong["t"] > PING_TIMEOUT:
+            print("[agent] no pong within timeout — forcing reconnect")
+            _force_close(ws)
             return
 
 
@@ -113,6 +137,7 @@ def on_open(ws):
     _session_active = False
     gen = _ws_gen
     print(f"[agent] connected (gen={gen})", flush=True)
+    _last_pong["t"] = time.time()
     if not TOKEN or TOKEN == "runtime-change-me":
         print("[agent] WARNING: RUNTIME_AUTH_SECRET is not set! Agent will fail to authenticate.")
     _cleanup_stale()
@@ -239,6 +264,8 @@ def on_message(ws, raw):
             except Exception:
                 pass
         _terminal_procs.clear()
+    elif t == "pong":
+        _last_pong["t"] = time.time()
     elif t == "ping":
         send(ws, "pong", {})
 
@@ -616,13 +643,23 @@ def _game_install(ws, p):
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
                 login_user = auth_code if auth_code else "anonymous"
-                # Use +app_update with proper syntax
-                cmd = ["steamcmd", "+login", login_user, "+app_update", str(app_id), "validate", "+quit"]
+                os.makedirs(install_dir, exist_ok=True)
+                print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
+                # force_install_dir ensures the game lands in our gamer-writable path
+                cmd = ["steamcmd", "+login", login_user, "+force_install_dir", install_dir,
+                       "+app_update", str(app_id), "validate", "+quit"]
+                log_path = os.path.join("/tmp", f"steamcmd-{app_id}.log")
+                logf = open(log_path, "w")
+                print(f"[agent] steamcmd log: {log_path}", flush=True)
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
                 for line in proc.stdout:
+                    try:
+                        logf.write(line); logf.flush()
+                    except Exception:
+                        pass
                     if _install_cancel.is_set():
                         proc.terminate()
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
@@ -653,6 +690,10 @@ def _game_install(ws, p):
                         percent = min(percent + 2, 95)
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                 proc.wait()
+                try:
+                    logf.close()
+                except Exception:
+                    pass
                 ok = proc.returncode == 0
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
