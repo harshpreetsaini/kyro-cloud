@@ -659,8 +659,9 @@ def _game_install(ws, p):
                 _send_progress("downloading", 0)
                 login_user = auth_code if auth_code else "anonymous"
                 print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
-                # force_install_dir ensures the game lands in our gamer-writable path
-                cmd = ["steamcmd", "+login", login_user, "+force_install_dir", install_dir,
+                # force_install_dir MUST come before +login, otherwise steamcmd
+                # errors with "Please use force_install_dir before logon!"
+                cmd = ["steamcmd", "+force_install_dir", install_dir, "+login", login_user,
                        "+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -682,6 +683,12 @@ def _game_install(ws, p):
                         downloaded = int(dl_match.group(1).replace(',', ''))
                         percent = float(dl_match.group(2))
                         _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                        continue
+                    # steamcmd self-update progress: "[  7%] Downloading update (...)"
+                    boot_match = re.search(r'\[\s*(\d+)%\]\s*downloading update', lo)
+                    if boot_match:
+                        percent = float(boot_match.group(1))
+                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                         continue
                     prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
