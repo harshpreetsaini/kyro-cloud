@@ -542,7 +542,7 @@ def _provider_login(ws, p):
                 err = None
                 try:
                     proc = subprocess.Popen(
-                        ["steamcmd", "+login", username, password],
+                        ["stdbuf", "-oL", "-eL", "steamcmd", "+login", username, password],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
                     gseq = [0]
@@ -771,7 +771,7 @@ def _game_install(ws, p):
                 cmd = ["steamcmd", "+force_install_dir", install_dir] + login_args + \
                       ["+app_update", str(app_id), "validate", "+quit"]
                 _log(f"cmd: {' '.join(cmd)}\n")
-                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                proc = subprocess.Popen(["stdbuf", "-oL", "-eL"] + cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
