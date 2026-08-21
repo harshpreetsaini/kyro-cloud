@@ -946,6 +946,7 @@ def main():
     print(f"[agent] starting — backend={BACKEND_WS} token={'set' if TOKEN and TOKEN != 'runtime-change-me' else 'MISSING'}", flush=True)
     attempt = 0
     while _running:
+        _self_update_codebase()
         try:
             ws = websocket.WebSocketApp(
                 url(),
