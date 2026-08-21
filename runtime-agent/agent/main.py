@@ -630,6 +630,20 @@ def _game_install(ws, p):
         try:
             _install_cancel.clear()
             os.makedirs(install_dir, exist_ok=True)
+            # Always-open install log so we can diagnose even if app_id is missing
+            log_path = os.path.join("/tmp", f"install-{game_id}.log")
+            try:
+                logf = open(log_path, "w")
+            except Exception:
+                logf = None
+            def _log(line):
+                try:
+                    if logf:
+                        logf.write(line); logf.flush()
+                except Exception:
+                    pass
+            _log(f"install start: method={install_method} app_id={app_id!r} provider={provider_type} install_dir={install_dir}\n")
+            print(f"[agent] install start: game={game_id} method={install_method} app={app_id} dir={install_dir} log={log_path}", flush=True)
             _send_progress("checking", 0)
 
             # Check if the installer is available
@@ -638,19 +652,17 @@ def _game_install(ws, p):
                 if not shutil.which("steamcmd"):
                     send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "steamcmd not installed — run: apt install steamcmd"})
                     send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "steamcmd not installed"})
+                    if logf: logf.close()
                     return
 
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
                 login_user = auth_code if auth_code else "anonymous"
-                os.makedirs(install_dir, exist_ok=True)
                 print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
                 # force_install_dir ensures the game lands in our gamer-writable path
                 cmd = ["steamcmd", "+login", login_user, "+force_install_dir", install_dir,
                        "+app_update", str(app_id), "validate", "+quit"]
-                log_path = os.path.join("/tmp", f"steamcmd-{app_id}.log")
-                logf = open(log_path, "w")
-                print(f"[agent] steamcmd log: {log_path}", flush=True)
+                _log(f"cmd: {' '.join(cmd)}\n")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
