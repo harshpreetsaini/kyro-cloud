@@ -193,6 +193,10 @@ def _fetch_linked_from_backend(provider):
 
 def send(ws, type_: str, payload=None):
     try:
+        # Skip silently if the socket isn't actually open — avoids spamming
+        # "send failed" on a socket that just dropped (reconnect in progress).
+        if not getattr(ws, "connected", False):
+            return
         with _send_lock:
             ws.send(json.dumps({"type": type_, "payload": payload}))
     except websocket.WebSocketConnectionClosedException:
@@ -1244,7 +1248,11 @@ def on_error(ws, err):
 
 
 def on_close(ws, close_status_code, close_msg):
+    global _ws_gen
     print(f"[agent] disconnected (code={close_status_code}, reason={close_msg})", flush=True)
+    # Invalidate the generation so the stale stats/keepalive threads for this
+    # socket stop immediately instead of retrying on a dead connection.
+    _ws_gen += 1
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────
