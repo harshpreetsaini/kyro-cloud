@@ -7,8 +7,7 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
-import { runtimeAction } from "@/lib/runtime/store";
-import { runtimeRefreshStream } from "@/lib/runtime/store";
+import { runtimeAction, runtimeRefreshStream, runtimeStore } from "@/lib/runtime/store";
 import { isFavorite, toggleFavorite as toggleFavoriteStore } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
 
@@ -107,18 +106,21 @@ export default function GameDetailsPage() {
     setLaunchState("checking");
     setLaunchError(null);
     try {
-      const isOffline = !session || session.state === "OFFLINE" || session.state === "STOPPED" || session.state === "DISCONNECTED";
-      if (isOffline) {
+      // The remote desktop renders only when an active stream exists. A stale
+      // `STREAMING` session state (e.g. after the cloud PC dropped) can leave
+      // us without a stream, so gate on the actual stream, not just session.state.
+      const hasActiveStream = () => !!runtimeStore.getSnapshot().stream;
+      if (!hasActiveStream()) {
         setLaunchState("starting_runtime");
         await runtimeAction("start");
-        await waitForState("STREAMING", 120000);
+        await waitForStream(120000);
       }
       setLaunchState("launching_game");
       launchGame(game.id);
       setLaunchState("connecting");
       await waitForGameRunning(game.id, 30000);
       setLaunchState("ready");
-      // Make sure the stream state is reconciled before opening the session view.
+      // Reconcile the stream from the backend in case the WS push was missed.
       runtimeRefreshStream();
       setTimeout(() => router.push("/session"), 1500);
     } catch (err) {
@@ -170,13 +172,14 @@ export default function GameDetailsPage() {
     }
   }, [game?.slug]);
 
-  const waitForState = (targetState: string, timeoutMs: number): Promise<void> => {
+  const waitForStream = (timeoutMs: number): Promise<void> => {
     return new Promise((resolve, reject) => {
       const start = Date.now();
       const iv = setInterval(() => {
-        if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("Timeout waiting for runtime")); return; }
-        if (session?.state === targetState) { clearInterval(iv); resolve(); }
-        if (session?.state === "ERROR") { clearInterval(iv); reject(new Error("Runtime failed to start")); }
+        if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("Timeout waiting for stream")); return; }
+        const s = runtimeStore.getSnapshot();
+        if (s.stream) { clearInterval(iv); resolve(); }
+        if (s.session?.state === "ERROR") { clearInterval(iv); reject(new Error("Runtime failed to start")); }
       }, 1000);
     });
   };
