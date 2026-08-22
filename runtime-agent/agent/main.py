@@ -815,13 +815,16 @@ def _provider_login(ws, p):
                             pass
                 except Exception as ex:
                     err = str(ex)
-                if ok:
-                    # Persist credentials (encrypted) so game installs run under this account
+                # Persist credentials as soon as the user provides them so game
+                # installs (including free-to-play) can run under this account.
+                # steamcmd verification below only enriches the owned-games list;
+                # a failed verification must NOT prevent installs from using the
+                # credentials the user entered.
+                if username and password:
                     _save_creds(provider, username, password)
-                    # Also persist the linked account on the Render backend (source of truth).
                     _report_linked_to_backend("steam", username, password)
-                    if owned:
-                        send(ws, "provider.entitlement", {"provider": "steam", "username": username, "appIds": owned})
+                if ok and owned:
+                    send(ws, "provider.entitlement", {"provider": "steam", "username": username, "appIds": owned})
                 send(ws, "provider.login.result", {"provider": provider, "ok": ok, "username": username if ok else None, "error": None if ok else (err or "Login failed — check credentials or Steam Guard code")})
             elif provider in ("epic", "gog"):
                 # Epic/GOG linking is performed via the web OAuth flow, which relays the
@@ -1040,16 +1043,15 @@ def _game_install(ws, p):
                     # Cache encrypted credentials for future installs
                     _save_creds(provider_type, steam_user, steam_pass)
                 if not steam_user and provider_type == "steam":
-                    # No linked Steam account available. Only fall back to
-                    # anonymous for free games; paid games must install under
-                    # the owner's account or they fail with "No subscription".
-                    is_free = bool(p.get("isFree"))
-                    if not is_free:
-                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam account not linked — link your Steam account in Providers to install this game."})
-                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account not linked"})
-                        if logf: logf.close()
-                        return
-                login_user = steam_user if steam_user else "anonymous"
+                    # A real Steam account is required for ALL Steam installs,
+                    # including free-to-play titles — anonymous cannot "own" an
+                    # F2P app and fails with "No subscription". Surface a clear
+                    # error instead of attempting an anonymous install.
+                    send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam account not linked — link your Steam account in Providers to install this game (a real account is required even for free-to-play titles)."})
+                    send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account not linked"})
+                    if logf: logf.close()
+                    return
+                login_user = steam_user
                 login_args = ["+login", login_user]
                 if steam_pass:
                     login_args.append(steam_pass)
