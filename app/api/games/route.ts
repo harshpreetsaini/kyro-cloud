@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGames, searchGames, getGamesBySort, getUniqueGenres, getUniqueProviders, getUniqueTags } from "@/lib/games/library.mjs";
+import type { GameEntry } from "@shared/types";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -9,6 +10,8 @@ export async function GET(req: NextRequest) {
   const provider = searchParams.get("provider");
   const installed = searchParams.get("installed");
   const tags = searchParams.get("tags");
+  const free = searchParams.get("free");
+  const linux = searchParams.get("linux");
 
   let games = getGames();
 
@@ -23,6 +26,12 @@ export async function GET(req: NextRequest) {
 
   // Filter by installed
   if (installed === "true") games = games.filter((g) => g.installed);
+
+  // Filter by free-to-play
+  if (free === "true") games = games.filter((g: any) => g.isFree);
+
+  // Filter by Linux compatibility
+  if (linux === "true") games = games.filter((g: any) => g.linuxCompatible);
 
   // Filter by tags
   if (tags) {

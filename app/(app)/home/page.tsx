@@ -232,7 +232,7 @@ export default function HomePage() {
       {renderGameRow(freeGames, "Free to Play", "/games")}
 
       {linuxFree.length > 0 &&
-        renderGameRow(linuxFree, "Free Steam Games for Linux", "/games", "Browse Linux")}
+        renderGameRow(linuxFree, "Free Steam Games for Linux", "/games?free=1&linux=1", "Browse Linux")}
 
       {renderGameRow(steamGames, "Steam Collection", "/games")}
 

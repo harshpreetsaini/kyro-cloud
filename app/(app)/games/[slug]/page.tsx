@@ -191,7 +191,7 @@ export default function GameDetailsPage() {
     return new Promise((resolve) => {
       const start = Date.now();
       const iv = setInterval(() => {
-        if (Date.now() - start > timeoutMs || runningGames.includes(gameId)) { clearInterval(iv); resolve(); }
+        if (Date.now() - start > timeoutMs || runtimeStore.getSnapshot().runningGames.includes(gameId)) { clearInterval(iv); resolve(); }
       }, 500);
     });
   };

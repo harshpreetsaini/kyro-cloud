@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { GameCard } from "@/components/GameCard";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
@@ -8,15 +9,20 @@ import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, SkeletonCard, EmptyState } from "@/components/ui";
 import type { GameEntry } from "@shared/types";
 
-type FilterType = "all" | "installed" | "running";
+export const dynamic = "force-dynamic";
+
+type FilterType = "all" | "installed" | "running" | "linuxF2p";
 type SortType = "rating" | "name" | "release" | "metacritic";
 
 export default function GamesPage() {
   const { launchGame, stopGame, runningGames, isInstalled } = useRuntime();
+  const params = useSearchParams();
   const [games, setGames] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<FilterType>("all");
+  const [filter, setFilter] = useState<FilterType>(
+    params.get("free") === "1" && params.get("linux") === "1" ? "linuxF2p" : "all"
+  );
   const [sort, setSort] = useState<SortType>("rating");
   const [genre, setGenre] = useState<string>("");
   const [genres, setGenres] = useState<string[]>([]);
@@ -44,6 +50,7 @@ export default function GamesPage() {
     switch (filter) {
       case "installed": result = result.filter((g) => isInstalled(g.id)); break;
       case "running": result = result.filter((g) => runningGames.includes(g.id)); break;
+      case "linuxF2p": result = result.filter((g) => g.isFree && g.linuxCompatible); break;
     }
     switch (sort) {
       case "rating": result = [...result].sort((a, b) => (b.rating || 0) - (a.rating || 0)); break;
@@ -87,12 +94,12 @@ export default function GamesPage() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Filter tabs */}
           <div className="flex gap-1 bg-secondary/40 rounded-lg p-0.5">
-            {(["all", "installed", "running"] as FilterType[]).map((f) => (
+            {(["all", "installed", "running", "linuxF2p"] as FilterType[]).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
                 className={`px-3 py-1.5 text-xs rounded-md transition-all ${
                   filter === f ? "bg-accent text-white" : "text-muted hover:text-text"
                 }`}>
-                {f.charAt(0).toUpperCase() + f.slice(1)}
+                {f === "linuxF2p" ? "Linux F2P" : f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
           </div>

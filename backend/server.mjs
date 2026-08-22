@@ -184,7 +184,7 @@ async function persistLinkedToVercel(provider, record, userId) {
 async function fetchLinkedFromVercel(provider) {
   const svc = process.env.BACKEND_SERVICE_KEY;
   const base = FRONTEND_URL;
-  const userId = mgr.activeUserId;
+  const userId = getManager().activeUserId;
   if (!svc || !base || userId == null) return null;
   try {
     const r = await fetch(
@@ -278,9 +278,9 @@ async function handleApi(req, res, url) {
   if (p === "/api/provider/link") {
     const svcKey = process.env.BACKEND_SERVICE_KEY;
     const agentToken = req.headers["x-agent-token"];
-    const secret = process.env.RUNTIME_AUTH_SECRET || "";
+    const secret = process.env.RUNTIME_AUTH_SECRET;
     const authedByService = svcKey && req.headers["x-service-key"] === svcKey;
-    const authedByAgent = !!agentToken && (secret === "" ? true : agentToken === secret);
+    const authedByAgent = !!secret && !!agentToken && agentToken === secret;
     if (!authedByService && !authedByAgent) {
       const u = await requireAuth(req, res);
       if (!u) return;
