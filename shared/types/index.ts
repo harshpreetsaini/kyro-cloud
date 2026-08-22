@@ -139,6 +139,7 @@ export interface GameEntry {
   workingDir?: string;
   launcher?: string;
   compatibility: Compatibility;
+  linuxCompatible?: boolean;
 }
 
 export interface FileItem {

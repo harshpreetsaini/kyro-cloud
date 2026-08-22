@@ -160,6 +160,28 @@ async function persistLinkedToVercel(provider, record, userId) {
   }
 }
 
+// Read a linked account from the durable Vercel store (used when our
+// in-memory cache is empty, e.g. after a backend restart) so the cloud agent
+// can keep installing under the user's account without a re-link.
+async function fetchLinkedFromVercel(provider) {
+  const svc = process.env.BACKEND_SERVICE_KEY;
+  const base = FRONTEND_URL;
+  const userId = mgr.activeUserId;
+  if (!svc || !base || userId == null) return null;
+  try {
+    const r = await fetch(
+      `${base}/api/provider/link?provider=${encodeURIComponent(provider)}&userId=${userId}`,
+      { headers: { "x-service-key": svc } }
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.data || null;
+  } catch (e) {
+    console.error("[provider/link] read from Vercel failed:", e && e.message ? e.message : e);
+    return null;
+  }
+}
+
 // Minimal multipart/form-data parser (handles text fields + binary files).
 function parseMultipart(buffer, contentType) {
   const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType || "");
@@ -290,7 +312,21 @@ async function handleApi(req, res, url) {
     }
     if (method === "GET") {
       const provider = url.searchParams.get("provider");
-      if (provider) return sendJson(req, res, 200, { ok: true, data: activeLinked[provider] || null });
+      if (provider) {
+        let rec = activeLinked[provider] || null;
+        if (!rec) {
+          // Durable fallback: the in-memory cache is gone (backend restart),
+          // but the link was persisted to Vercel — recover it for the agent.
+          try {
+            const durable = await fetchLinkedFromVercel(provider);
+            if (durable) {
+              activeLinked[provider] = durable;
+              rec = durable;
+            }
+          } catch {}
+        }
+        return sendJson(req, res, 200, { ok: true, data: rec });
+      }
       return sendJson(req, res, 200, { ok: true, data: activeLinked });
     }
     return sendJson(req, res, 405, { ok: false, error: "Method not allowed" });

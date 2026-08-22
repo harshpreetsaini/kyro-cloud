@@ -80,6 +80,22 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   await ensureInit();
+  // Service-key path: the Render backend asks for a user's durable linked
+  // account (including the secret) so the cloud agent can install after a
+  // backend/agent restart without forcing the user to re-link.
+  const serviceKey = req.headers.get("x-service-key") || "";
+  const isService = SERVICE_KEY && serviceKey === SERVICE_KEY;
+  if (isService) {
+    const userId = Number(req.nextUrl.searchParams.get("userId"));
+    const provider = req.nextUrl.searchParams.get("provider");
+    if (!userId || !provider) {
+      return NextResponse.json({ ok: false, error: "Missing userId/provider" }, { status: 400 });
+    }
+    const profile = await getProfile(userId);
+    const rec = (profile.providers || {})[provider];
+    return NextResponse.json({ ok: true, data: rec ? { ...rec } : null });
+  }
+
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value || req.headers.get("authorization")?.replace(/^Bearer\s+/i, ""));
   if (!session || session.userId == null) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
