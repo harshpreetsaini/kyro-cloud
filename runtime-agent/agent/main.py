@@ -405,6 +405,17 @@ def on_open(ws):
     send(ws, "ready", {"gpu": detect_gpu(), "hostname": os.uname().nodename})
     send(ws, "app.list", apps.detect_apps())
     _report_installed_games(ws, "/home/gamer/games")
+    # Re-announce any linked provider accounts that were persisted on the
+    # backend, so the web UI shows them as "Linked" again after this runtime
+    # (re)started — no need for the user to re-link Steam/Epic/GOG.
+    for prov in ("steam", "epic", "gog"):
+        try:
+            linked = _fetch_linked_from_backend(prov)
+            if linked and linked.get("username"):
+                send(ws, "provider.login.result",
+                     {"provider": prov, "ok": True, "username": linked.get("username")})
+        except Exception:
+            pass
     _start_stats(ws, gen)
     threading.Thread(target=_keepalive_loop, args=(ws, gen), daemon=True).start()
 

@@ -141,6 +141,24 @@ let activeLinked = {};
 globalThis.__getActiveLinked = () => activeLinked;
 globalThis.__setActiveLinked = (v) => { activeLinked = v || {}; };
 
+// Durable backend store for linked provider accounts (survives backend
+// restarts without depending on the browser being connected or Vercel).
+const LINKS_FILE = path.join(DATA_DIR, "provider_links.json");
+function loadLinked() {
+  try {
+    const raw = fs.readFileSync(LINKS_FILE, "utf8");
+    const d = JSON.parse(raw);
+    if (d && typeof d === "object") activeLinked = d;
+  } catch {}
+}
+function saveLinked() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(activeLinked));
+  } catch {}
+}
+loadLinked();
+
 // Persist a linked account into the durable Vercel Postgres store (via the
 // frontend's /api/provider/link service-key endpoint). Used so provider links
 // survive backend restarts. Skipped when the call already came FROM Vercel
@@ -284,6 +302,7 @@ async function handleApi(req, res, url) {
       };
       // Runtime cache for agent relay (plaintext, in-memory only).
       activeLinked[provider] = record;
+      saveLinked();
       if (mgr.activeUserId == null) {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
         const u = await verifySession(tok);
@@ -321,6 +340,7 @@ async function handleApi(req, res, url) {
             const durable = await fetchLinkedFromVercel(provider);
             if (durable) {
               activeLinked[provider] = durable;
+              saveLinked();
               rec = durable;
             }
           } catch {}
