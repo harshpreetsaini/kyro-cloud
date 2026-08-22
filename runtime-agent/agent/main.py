@@ -41,6 +41,36 @@ def _games_base():
     return "/home/gamer/games"
 
 
+def _ensure_tool(pkg, module=None):
+    """pip install a CLI tool, tolerating externally-managed environments
+    (PEP 668, e.g. Colab) that reject bare `pip install`."""
+    tried = [
+        ["pip3", "install", "-q", "--break-system-packages", pkg],
+        ["python3", "-m", "pip", "install", "-q", "--break-system-packages", pkg],
+        ["pip3", "install", "-q", pkg],
+    ]
+    for args in tried:
+        try:
+            if subprocess.run(args, capture_output=True, text=True, timeout=240).returncode == 0:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _legendary_cmd():
+    """Return a working legendary invocation, preferring the console script
+    but falling back to `python3 -m legendary` so a user-site install that is
+    not on PATH still works."""
+    for c in (["legendary"], ["python3", "-m", "legendary"]):
+        try:
+            if subprocess.run(c + ["--version"], capture_output=True, text=True, timeout=15).returncode == 0:
+                return c
+        except Exception:
+            pass
+    return None
+
+
 def _cleanup_install(game_id):
     """Remove the partially downloaded files for a game after cancel or
     failure. Only runs for directories registered as the active install of
@@ -884,10 +914,14 @@ def _provider_sync(ws, p):
                             if len(parts) == 2:
                                 games.append({"appId": parts[0], "name": parts[1]})
             elif provider == "epic":
-                subprocess.run(["pip3", "install", "-q", "legendary-gl"], capture_output=True, timeout=120)
+                _ensure_tool("legendary-gl", "legendary")
+                lcmd = _legendary_cmd()
+                if not lcmd:
+                    send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": "legendary not available. Install failed (externally-managed env?)."})
+                    return
                 if auth_code:
-                    subprocess.run(["legendary", "auth", "--code", auth_code], capture_output=True, text=True, timeout=60)
-                result = subprocess.run(["legendary", "list-games", "--csv", "--tsv"], capture_output=True, text=True, timeout=60)
+                    subprocess.run(lcmd + ["auth", "--code", auth_code], capture_output=True, text=True, timeout=60)
+                result = subprocess.run(lcmd + ["list-games", "--csv", "--tsv"], capture_output=True, text=True, timeout=60)
                 for line in result.stdout.strip().split("\n"):
                     if line.startswith("App name") or not line.strip():
                         continue
@@ -901,7 +935,7 @@ def _provider_sync(ws, p):
                     send(ws, "provider.library", {"provider": provider, "games": [], "count": 0, "error": "legendary not available. Run 'legendary auth' on Colab."})
                     return
             elif provider == "gog":
-                subprocess.run(["pip3", "install", "-q", "lgogdownloader"], capture_output=True, timeout=120)
+                _ensure_tool("lgogdownloader")
                 result = subprocess.run(["lgogdownloader", "--list", "--csv"], capture_output=True, text=True, timeout=60)
                 for line in result.stdout.strip().split("\n"):
                     parts = line.split(";")
@@ -1199,7 +1233,8 @@ def _game_install(ws, p):
                     _report_installed_games(ws, _games_base())
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
-                proc = subprocess.Popen(["legendary", "install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+                lcmd = _legendary_cmd() or ["legendary"]
+                proc = subprocess.Popen(lcmd + ["install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
                 _install_proc = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
