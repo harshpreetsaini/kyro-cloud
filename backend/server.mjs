@@ -4,6 +4,7 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { setupWebSocket } from "../lib/ws/server.mjs";
 import { getManager } from "../lib/runtime/manager.mjs";
 import {
@@ -68,15 +69,71 @@ function readJson(req) {
 }
 
 // ---------- linked provider accounts (persisted on Render, not the agent) ----------
+// Steam passwords are encrypted at rest (AES-256-GCM, key derived from
+// RUNTIME_AUTH_SECRET) so a leak of linked.json never discloses plaintext
+// credentials. In-memory we keep the plaintext `password` (used when relaying
+// the connection to the agent), but the on-disk file only ever holds `passwordEnc`.
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 const LINKED_FILE = path.join(DATA_DIR, "linked.json");
 let linkedAccounts = {};
-try { linkedAccounts = JSON.parse(fs.readFileSync(LINKED_FILE, "utf8")); } catch {}
-globalThis.__linkedAccounts = linkedAccounts;
-function persistLinked() {
-  try { fs.writeFileSync(LINKED_FILE, JSON.stringify(linkedAccounts)); } catch {}
+function _secretKey() {
+  const secret = process.env.RUNTIME_AUTH_SECRET || "dev-insecure-secret-change-me";
+  return crypto.createHash("sha256").update(secret).digest();
 }
+function encryptSecret(plain) {
+  try {
+    const key = _secretKey();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const enc = Buffer.concat([cipher.update(String(plain ?? ""), "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `${iv.toString("hex")}:${tag.toString("hex")}:${enc.toString("hex")}`;
+  } catch {
+    return "";
+  }
+}
+function decryptSecret(cipher) {
+  try {
+    const [ivH, tagH, encH] = String(cipher || "").split(":");
+    if (!ivH || !tagH || !encH) return "";
+    const key = _secretKey();
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivH, "hex"));
+    decipher.setAuthTag(Buffer.from(tagH, "hex"));
+    const dec = Buffer.concat([decipher.update(Buffer.from(encH, "hex")), decipher.final()]);
+    return dec.toString("utf8");
+  } catch {
+    return "";
+  }
+}
+function loadLinked() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(LINKED_FILE, "utf8"));
+    for (const [k, v] of Object.entries(raw || {})) {
+      if (v && v.passwordEnc) {
+        v.password = decryptSecret(v.passwordEnc);
+        delete v.passwordEnc;
+      }
+      linkedAccounts[k] = v;
+    }
+  } catch {}
+}
+function persistLinked() {
+  try {
+    const out = {};
+    for (const [k, v] of Object.entries(linkedAccounts)) {
+      const copy = { ...v };
+      if (copy.password) {
+        copy.passwordEnc = encryptSecret(copy.password);
+        delete copy.password;
+      }
+      out[k] = copy;
+    }
+    fs.writeFileSync(LINKED_FILE, JSON.stringify(out));
+  } catch {}
+}
+loadLinked();
+globalThis.__linkedAccounts = linkedAccounts;
 
 // Minimal multipart/form-data parser (handles text fields + binary files).
 function parseMultipart(buffer, contentType) {

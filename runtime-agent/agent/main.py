@@ -193,10 +193,6 @@ def _fetch_linked_from_backend(provider):
 
 def send(ws, type_: str, payload=None):
     try:
-        # Skip silently if the socket isn't actually open — avoids spamming
-        # "send failed" on a socket that just dropped (reconnect in progress).
-        if not getattr(ws, "connected", False):
-            return
         with _send_lock:
             ws.send(json.dumps({"type": type_, "payload": payload}))
     except websocket.WebSocketConnectionClosedException:
@@ -285,7 +281,6 @@ def _keepalive_loop(ws, gen):
             return
         try:
             send(ws, "ping", {"ts": int(time.time() * 1000)})
-            print(f"[agent] ping sent (connected={getattr(ws, 'connected', None)})", flush=True)
         except Exception as ex:
             print(f"[agent] keepalive send failed ({ex}) — connection may be dead", flush=True)
             _force_close(ws)
@@ -507,7 +502,6 @@ def on_message(ws, raw):
         _terminal_procs.clear()
     elif t == "pong":
         _last_pong["t"] = time.time()
-        print("[agent] pong received", flush=True)
     elif t == "ping":
         send(ws, "pong", {})
     elif t == "steam.guard.code":
@@ -762,12 +756,14 @@ def _provider_login(ws, p):
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
                     gseq = [0]
                     authed = False
-                    guard_attempts = [0]
+                    guard_attempts = 0
                     MAX_GUARD = 3
+                    requesting = False
                     for line in proc.stdout:
                         if "Steam account successfully logged in" in line:
                             ok = True
                             authed = True
+                            requesting = False
                             # Pull the owned-apps list while we're authenticated.
                             try:
                                 proc.stdin.write("+apps_list\n")
@@ -779,8 +775,13 @@ def _provider_login(ws, p):
                         # Only handle a guard prompt before we're authenticated; once
                         # logged in, ignore any trailing guard-related log lines.
                         if not authed and _is_steam_guard_prompt(lo):
-                            guard_attempts[0] += 1
-                            if guard_attempts[0] > MAX_GUARD:
+                            # The guard prompt spans several log lines; only request a
+                            # code once per prompt cycle (not once per matching line).
+                            if requesting:
+                                continue
+                            requesting = True
+                            guard_attempts += 1
+                            if guard_attempts > MAX_GUARD:
                                 err = "Steam Guard code was rejected too many times. Check the code/email and try again."
                                 break
                             code = _request_steam_guard(f"login-{username}")
@@ -791,6 +792,10 @@ def _provider_login(ws, p):
                                 except Exception:
                                     pass
                             continue
+                        # A fresh login attempt or a rejection lets the next guard
+                        # prompt request a code again (one attempt per cycle).
+                        if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
+                            requesting = False
                         # Steamcmd apps_list output: "<appid>\t<name>"
                         s = line.strip()
                         if s and s[0].isdigit() and "\t" in s:
@@ -959,6 +964,11 @@ def _provider_linked(ws, p):
                 }, f)
             _report_linked_to_backend("gog", username, account_id=account_id, access_token=access_token, refresh_token=refresh_token)
             send(ws, "provider.login.result", {"provider": "gog", "ok": True, "username": username})
+        elif provider == "steam":
+            # Steam linking is performed interactively by the agent itself
+            # (Steam Guard); the backend merely echoes our own POST back here,
+            # so don't emit a conflicting failure result.
+            return
         else:
             send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Cannot link provider {provider} this way."})
     except Exception as ex:
@@ -1056,8 +1066,9 @@ def _game_install(ws, p):
                 _agent_pids.append(proc.pid)
                 percent = total_bytes = speed_bps = 0
                 authed = False
-                guard_attempts = [0]
+                guard_attempts = 0
                 MAX_GUARD = 3
+                requesting = False
                 for line in proc.stdout:
                     try:
                         logf.write(line); logf.flush()
@@ -1073,8 +1084,13 @@ def _game_install(ws, p):
                     # back. Only before we're authenticated; once the download
                     # starts we ignore any trailing guard-related log lines.
                     if not authed and _is_steam_guard_prompt(lo):
-                        guard_attempts[0] += 1
-                        if guard_attempts[0] > MAX_GUARD:
+                        # The guard prompt spans several log lines; only request a
+                        # code once per prompt cycle (not once per matching line).
+                        if requesting:
+                            continue
+                        requesting = True
+                        guard_attempts += 1
+                        if guard_attempts > MAX_GUARD:
                             send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
                             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
                             _kill_install_proc()
@@ -1088,6 +1104,10 @@ def _game_install(ws, p):
                             except Exception:
                                 pass
                         continue
+                    # A fresh login attempt or a rejection lets the next guard
+                    # prompt request a code again (one attempt per cycle).
+                    if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
+                        requesting = False
                     dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
                     if dl_match:
                         downloaded = int(dl_match.group(1).replace(',', ''))
@@ -1133,6 +1153,7 @@ def _game_install(ws, p):
                         continue
                     if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
                         authed = True
+                        requesting = False
                         percent = min(percent + 2, 95)
                         _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                 proc.wait()
@@ -1250,11 +1271,7 @@ def on_error(ws, err):
 
 
 def on_close(ws, close_status_code, close_msg):
-    global _ws_gen
     print(f"[agent] disconnected (code={close_status_code}, reason={close_msg})", flush=True)
-    # Invalidate the generation so the stale stats/keepalive threads for this
-    # socket stop immediately instead of retrying on a dead connection.
-    _ws_gen += 1
 
 
 # ── Main loop with exponential backoff ─────────────────────────────────
