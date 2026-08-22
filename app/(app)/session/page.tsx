@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { RemoteDesktop } from "@/components/RemoteDesktop";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
+import { runtimeRefreshStream } from "@/lib/runtime/store";
 import { Button } from "@/components/ui";
 
 function HUD() {
@@ -66,6 +67,9 @@ export default function SessionPage() {
 
   useEffect(() => {
     reveal();
+    // Reconcile the active stream from the backend so the remote desktop
+    // renders even if the WS `stream.status` push was missed.
+    runtimeRefreshStream();
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, []);
 

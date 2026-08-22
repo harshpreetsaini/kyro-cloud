@@ -44,6 +44,16 @@ export default function ProvidersPage() {
     if (providerLinked?.steam) setLinking(false);
   }, [providerLinked?.steam]);
 
+  // The backend is the source of truth for the linked Steam account (it
+  // persists immediately on a successful link). Derive the "linked" state from
+  // BOTH the live WS event and the backend session so the form updates even if
+  // the WS push was missed, and so it survives a page refresh.
+  const steamProvider = providers.find((p) => p.id === "steam");
+  const steamSessionLinked = !!steamProvider?.loggedIn;
+  const steamSessionUser = steamProvider?.username;
+  const steamLinked = !!providerLinked?.steam?.ok || steamSessionLinked;
+  const steamDisplayName = providerLinked?.steam?.username || steamSessionUser;
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const success = params.get("success");
@@ -125,7 +135,17 @@ export default function ProvidersPage() {
     } catch (e) {
       console.error("linkProvider failed", e);
     }
-    setTimeout(() => setLinking(false), 15000);
+    // Poll the backend session (source of truth) so the UI flips to "Linked"
+    // as soon as the account is persisted — even if the WS push was missed.
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries += 1;
+      fetchProviders();
+      if (tries >= 12) {
+        clearInterval(iv);
+        setLinking(false);
+      }
+    }, 2000);
   };
 
   if (loading) {
@@ -224,19 +244,19 @@ export default function ProvidersPage() {
       <div className="panel p-5 flex flex-col gap-3 border-accent/30">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center text-2xl">🎮</div>
-          <div className="min-w-0">
-            <h3 className="font-semibold">Steam Account (for cloud installs)</h3>
-            {providerLinked?.steam?.ok ? (
-              <p className="text-sm text-green-600">✓ Linked as {providerLinked.steam.username} — installs run under your account</p>
-            ) : (
-              <p className="text-xs text-muted">Enter your Steam login + password. steamcmd uses them only to install games you own.</p>
-            )}
-            {providerLinked?.steam?.error && (
-              <p className="text-sm text-danger mt-1">{providerLinked.steam.error}</p>
-            )}
+            <div className="min-w-0">
+              <h3 className="font-semibold">Steam Account (for cloud installs)</h3>
+              {steamLinked ? (
+                <p className="text-sm text-green-600">✓ Linked as {steamDisplayName || "Steam"} — installs run under your account</p>
+              ) : (
+                <p className="text-xs text-muted">Enter your Steam login + password. steamcmd uses them only to install games you own.</p>
+              )}
+              {providerLinked?.steam?.error && (
+                <p className="text-sm text-danger mt-1">{providerLinked.steam.error}</p>
+              )}
+            </div>
           </div>
-        </div>
-        {!providerLinked?.steam?.ok && (
+          {!steamLinked && (
           <div className="flex flex-col sm:flex-row gap-3">
             <input
               type="text"

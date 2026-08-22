@@ -149,6 +149,8 @@ function connect() {
     }
     retry = 0;
     emit();
+    // Reconcile stream state (covers the already-running-session Play path).
+    runtimeRefreshStream();
     // Send keepalive ping every 10 seconds (also measures browser→backend latency)
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
@@ -377,6 +379,23 @@ function connect() {
         break;
     }
   };
+}
+
+// Re-fetch the active stream from the backend (source of truth) and populate
+// the in-memory stream. The frontend only learns about `stream` via the WS
+// `stream.status` push, which can be missed (e.g. when the cloud PC is already
+// running and Play skips the start flow). Calling this reconciles a null
+// `stream` so the remote desktop renders instead of "No active cloud session".
+export async function runtimeRefreshStream() {
+  try {
+    const r = await fetch(api("/api/stream/session"), { headers: { ...authHeader() } });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.ok && j.data) {
+      state = { ...state, stream: j.data as StreamClientConfig };
+      emit();
+    }
+  } catch {}
 }
 
 export function ensureConnected() {

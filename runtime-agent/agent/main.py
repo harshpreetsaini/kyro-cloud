@@ -310,25 +310,22 @@ def _cleanup_stale():
 
 
 # ── WebSocket handlers ─────────────────────────────────────────────────
-def _detect_installed_games(base_dir):
-    """Scan the games base folder (and each per-game sub-directory) for
+def _detect_installed_games(base_dir, max_depth=4):
+    """Scan the games base folder (recursively, up to max_depth) for
     appmanifest_<appid>.acf files and return a list of installed games
-    (appId + name)."""
+    (appId + name). steamcmd nests these under <install_dir>/steamapps/, so a
+    recursive walk is required (a single-level scan misses them)."""
     found = []
+    seen = set()
     try:
         if not os.path.isdir(base_dir):
             return found
-        candidates = [base_dir]
-        for name in os.listdir(base_dir):
-            sub = os.path.join(base_dir, name)
-            if os.path.isdir(sub):
-                candidates.append(sub)
-        for d in candidates:
-            try:
-                entries = os.listdir(d)
-            except Exception:
+        for root, dirs, files in os.walk(base_dir):
+            depth = root[len(base_dir):].count(os.sep)
+            if depth > max_depth:
+                dirs[:] = []
                 continue
-            for name in entries:
+            for name in files:
                 if not (name.startswith("appmanifest_") and name.endswith(".acf")):
                     continue
                 appid = name[len("appmanifest_"):-len(".acf")]
@@ -336,7 +333,7 @@ def _detect_installed_games(base_dir):
                     continue
                 gname = "App %s" % appid
                 try:
-                    with open(os.path.join(d, name), "r", errors="ignore") as f:
+                    with open(os.path.join(root, name), "r", errors="ignore") as f:
                         content = f.read()
                     m = re.search(r'"appid"\s+"(\d+)"', content)
                     if m:
@@ -346,6 +343,9 @@ def _detect_installed_games(base_dir):
                         gname = nm.group(1)
                 except Exception:
                     pass
+                if appid in seen:
+                    continue
+                seen.add(appid)
                 found.append({"appId": appid, "name": gname})
     except Exception as ex:
         print(f"[agent] installed-game scan failed: {ex}")

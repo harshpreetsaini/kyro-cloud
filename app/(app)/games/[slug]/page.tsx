@@ -8,6 +8,7 @@ import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
 import { runtimeAction } from "@/lib/runtime/store";
+import { runtimeRefreshStream } from "@/lib/runtime/store";
 import { isFavorite, toggleFavorite as toggleFavoriteStore } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
 
@@ -117,6 +118,8 @@ export default function GameDetailsPage() {
       setLaunchState("connecting");
       await waitForGameRunning(game.id, 30000);
       setLaunchState("ready");
+      // Make sure the stream state is reconciled before opening the session view.
+      runtimeRefreshStream();
       setTimeout(() => router.push("/session"), 1500);
     } catch (err) {
       setLaunchState("error");
