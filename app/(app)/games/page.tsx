@@ -8,13 +8,14 @@ import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, SkeletonCard, EmptyState } from "@/components/ui";
 import type { GameEntry } from "@shared/types";
+import { Suspense } from "react";
 
 export const dynamic = "force-dynamic";
 
 type FilterType = "all" | "installed" | "running" | "linuxF2p";
 type SortType = "rating" | "name" | "release" | "metacritic";
 
-export default function GamesPage() {
+function GamesPage() {
   const { launchGame, stopGame, runningGames, isInstalled } = useRuntime();
   const params = useSearchParams();
   const [games, setGames] = useState<GameEntry[]>([]);
@@ -144,5 +145,13 @@ export default function GamesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function GamesPageWrapper() {
+  return (
+    <Suspense fallback={<div className="flex flex-col gap-5"><div className="h-8 w-40 bg-secondary/40 rounded animate-pulse" /><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{Array.from({ length: 12 }).map((_, i) => <SkeletonCard key={i} />)}</div></div>}>
+      <GamesPage />
+    </Suspense>
   );
 }

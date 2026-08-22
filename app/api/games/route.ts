@@ -28,10 +28,10 @@ export async function GET(req: NextRequest) {
   if (installed === "true") games = games.filter((g) => g.installed);
 
   // Filter by free-to-play
-  if (free === "true") games = games.filter((g: any) => g.isFree);
+  if (free === "true" || free === "1") games = games.filter((g: any) => g.isFree);
 
   // Filter by Linux compatibility
-  if (linux === "true") games = games.filter((g: any) => g.linuxCompatible);
+  if (linux === "true" || linux === "1") games = games.filter((g: any) => g.linuxCompatible);
 
   // Filter by tags
   if (tags) {
