@@ -1093,6 +1093,14 @@ def _game_install(ws, p):
                         send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Your Steam account '" + str(steam_user) + "' does not own " + str(gname) + ". Even free-to-play Steam games must be added to your Steam library (free) before they can be installed. Open the Steam store, add it to your library, then retry."})
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account does not own this game"})
                         return
+                    if "invalid platform" in lo:
+                        _log("steamcmd platform error: " + line)
+                        _kill_install_proc()
+                        _cleanup_install(game_id)
+                        gname = p.get("name") or f"app {app_id}"
+                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "This game (" + str(gname) + ") is not available for the cloud PC's operating system (Linux). It may be Windows-only and cannot be installed on this Linux cloud instance."})
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Game not available for this platform"})
+                        return
                     # Steam Guard (2FA) code requested — ask the user and feed it
                     # back. Only before we're authenticated; once the download
                     # starts we ignore any trailing guard-related log lines.
