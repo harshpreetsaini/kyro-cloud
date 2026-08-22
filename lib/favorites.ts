@@ -1,52 +1,92 @@
 "use client";
 
-// Client-side favorites persistence (localStorage). Kept simple and synchronous
-// so both the game detail page and the Favorites page read the same source.
+// Favorites persistence. The backend user profile is the source of truth (so
+// favorites sync across devices and survive clearing browser storage). A local
+// cache (memory + localStorage) keeps the existing synchronous API usable by the
+// UI; writes are pushed to the backend asynchronously when a session exists.
 
-const KEY = "kyro_favorites";
+import { authHeader, getToken } from "@/lib/auth/client";
 
-function read(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+const KEY = "kyro_favorites_cache";
+let cache: string[] | null = null;
+
+function readCache(): string[] {
+  if (cache) return cache;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(KEY);
+      cache = raw ? JSON.parse(raw) : [];
+    } catch {
+      cache = [];
+    }
+  } else {
+    cache = [];
+  }
+  return cache || [];
+}
+
+function writeCache(ids: string[]): void {
+  cache = ids;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify(ids));
+    } catch {
+      /* ignore quota / private mode errors */
+    }
   }
 }
 
-function write(ids: string[]): void {
-  if (typeof window === "undefined") return;
+async function pushToBackend(ids: string[]): Promise<void> {
+  if (!getToken()) return;
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(ids));
+    await fetch("/api/user/profile", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader() },
+      body: JSON.stringify({ favorites: ids }),
+    });
   } catch {
-    /* ignore quota / private mode errors */
+    /* offline — local cache remains source until next push */
   }
+}
+
+// Hydrate the cache from the user profile (Vercel Postgres). Call on login / app mount.
+export async function loadFavorites(): Promise<string[]> {
+  if (!getToken()) return readCache();
+  try {
+    const res = await fetch("/api/user/profile", { headers: { ...authHeader() } });
+    const j = await res.json();
+    if (j.ok && Array.isArray(j.data?.profile?.favorites)) {
+      writeCache(j.data.profile.favorites);
+    }
+  } catch {
+    /* offline — keep local cache */
+  }
+  return readCache();
 }
 
 export function getFavorites(): string[] {
-  return read();
+  return readCache();
 }
 
 export function isFavorite(id: string): boolean {
-  return read().includes(id);
+  return readCache().includes(id);
 }
 
 export function addFavorite(id: string): void {
-  const ids = read();
+  const ids = readCache();
   if (!ids.includes(id)) {
-    ids.push(id);
-    write(ids);
+    writeCache([...ids, id]);
+    pushToBackend(readCache());
   }
 }
 
 export function removeFavorite(id: string): void {
-  write(read().filter((x) => x !== id));
+  writeCache(readCache().filter((x) => x !== id));
+  pushToBackend(readCache());
 }
 
 export function toggleFavorite(id: string): boolean {
-  const ids = read();
+  const ids = readCache();
   if (ids.includes(id)) {
     removeFavorite(id);
     return false;

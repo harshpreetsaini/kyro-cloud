@@ -8,11 +8,12 @@ import { authHeader } from "@/lib/auth/client";
 import { SkeletonCard, EmptyState, Button } from "@/components/ui";
 import type { GameEntry } from "@shared/types";
 import Link from "next/link";
-import { getFavorites } from "@/lib/favorites";
+import { loadFavorites } from "@/lib/favorites";
 
 export default function FavoritesPage() {
   const { launchGame, stopGame, runningGames } = useRuntime();
   const [games, setGames] = useState<GameEntry[]>([]);
+  const [favIds, setFavIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,7 +24,10 @@ export default function FavoritesPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const favIds = getFavorites();
+  useEffect(() => {
+    loadFavorites().then(setFavIds).catch(() => {});
+  }, []);
+
   const favoriteGames = games.filter((g) => favIds.includes(g.id));
 
   return (

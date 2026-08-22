@@ -16,9 +16,9 @@ import {
   readFile,
 } from "../lib/files/fs.mjs";
 import { getGames } from "../lib/games/library.mjs";
-import { signSession, verifySession, SESSION_COOKIE } from "../lib/auth/jwt.mjs";
+import { verifySession, SESSION_COOKIE } from "../lib/auth/jwt.mjs";
 
-const FRONTEND_URL = (process.env.FRONTEND_URL || "").trim();
+const FRONTEND_URL = (process.env.FRONTEND_URL || "https://kyro-cloud.vercel.app").trim();
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
 function uid() {
@@ -48,6 +48,18 @@ function sendJson(req, res, status, body, extra = {}) {
   res.end(data);
 }
 
+function sendHtmlError(res, message) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>KYRO CLOUD</title>
+<style>body{font-family:system-ui,sans-serif;background:#0b0b0f;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.panel{background:#15151c;padding:28px 32px;border-radius:14px;border:1px solid #2a2a33;max-width:460px;text-align:center}
+h1{font-size:18px;margin:0 0 10px}button{margin-top:16px;background:#6366f1;color:#fff;border:0;padding:9px 16px;border-radius:9px;cursor:pointer}
+a{color:#fff;text-decoration:none}</style></head>
+<body><div class="panel"><h1>KYRO CLOUD</h1><p>${message}</p>
+<button onclick="location.href='${FRONTEND_URL}'">Back to KYRO CLOUD</button></div></body></html>`;
+  res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -68,15 +80,13 @@ function readJson(req) {
   });
 }
 
-// ---------- linked provider accounts (persisted on Render, not the agent) ----------
-// Steam passwords are encrypted at rest (AES-256-GCM, key derived from
-// RUNTIME_AUTH_SECRET) so a leak of linked.json never discloses plaintext
-// credentials. In-memory we keep the plaintext `password` (used when relaying
-// the connection to the agent), but the on-disk file only ever holds `passwordEnc`.
+// ---------- linked provider accounts (per-user, persisted in user profiles) ----------
+// Steam/Epic/GOG credentials are encrypted at rest (AES-256-GCM, key derived
+// from RUNTIME_AUTH_SECRET) so a leak of the database never discloses plaintext
+// credentials. The source of truth is each user's profile row; we keep a small
+// in-memory cache of the active user's linked accounts for fast agent relay.
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
-const LINKED_FILE = path.join(DATA_DIR, "linked.json");
-let linkedAccounts = {};
 function _secretKey() {
   const secret = process.env.RUNTIME_AUTH_SECRET || "dev-insecure-secret-change-me";
   return crypto.createHash("sha256").update(secret).digest();
@@ -106,34 +116,49 @@ function decryptSecret(cipher) {
     return "";
   }
 }
-function loadLinked() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(LINKED_FILE, "utf8"));
-    for (const [k, v] of Object.entries(raw || {})) {
-      if (v && v.passwordEnc) {
-        v.password = decryptSecret(v.passwordEnc);
-        delete v.passwordEnc;
-      }
-      linkedAccounts[k] = v;
-    }
-  } catch {}
+// Stored record -> wire form for the cloud agent (decrypts creds at the edge).
+function toWireProvider(rec) {
+  if (!rec) return rec;
+  const out = { ...rec };
+  if (out.passwordEnc) { out.password = decryptSecret(out.passwordEnc); delete out.passwordEnc; }
+  if (out.accessTokenEnc) { out.accessToken = decryptSecret(out.accessTokenEnc); delete out.accessTokenEnc; }
+  if (out.refreshTokenEnc) { out.refreshToken = decryptSecret(out.refreshTokenEnc); delete out.refreshTokenEnc; }
+  return out;
 }
-function persistLinked() {
-  try {
-    const out = {};
-    for (const [k, v] of Object.entries(linkedAccounts)) {
-      const copy = { ...v };
-      if (copy.password) {
-        copy.passwordEnc = encryptSecret(copy.password);
-        delete copy.password;
-      }
-      out[k] = copy;
-    }
-    fs.writeFileSync(LINKED_FILE, JSON.stringify(out));
-  } catch {}
+// Incoming record (plaintext creds from agent) -> stored form (ciphertext).
+function toStoredProvider(rec) {
+  if (!rec) return rec;
+  const out = { ...rec };
+  if (out.password) { out.passwordEnc = encryptSecret(out.password); delete out.password; }
+  if (out.accessToken) { out.accessTokenEnc = encryptSecret(out.accessToken); delete out.accessToken; }
+  if (out.refreshToken) { out.refreshTokenEnc = encryptSecret(out.refreshToken); delete out.refreshToken; }
+  return out;
 }
-loadLinked();
-globalThis.__linkedAccounts = linkedAccounts;
+
+// Active-user linked cache (per the currently authenticated WS client). Used to
+// feed the cloud agent after restarts without exposing other users' creds.
+let activeLinked = {};
+globalThis.__getActiveLinked = () => activeLinked;
+globalThis.__setActiveLinked = (v) => { activeLinked = v || {}; };
+
+// Persist a linked account into the durable Vercel Postgres store (via the
+// frontend's /api/provider/link service-key endpoint). Used so provider links
+// survive backend restarts. Skipped when the call already came FROM Vercel
+// (service key) to avoid a relay loop.
+async function persistLinkedToVercel(provider, record, userId) {
+  const svc = process.env.BACKEND_SERVICE_KEY;
+  const base = FRONTEND_URL;
+  if (!svc || !base || userId == null) return;
+  try {
+    await fetch(`${base}/api/provider/link`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-service-key": svc },
+      body: JSON.stringify({ ...record, provider, userId }),
+    });
+  } catch (e) {
+    console.error("[provider/link] persist to Vercel failed:", e && e.message ? e.message : e);
+  }
+}
 
 // Minimal multipart/form-data parser (handles text fields + binary files).
 function parseMultipart(buffer, contentType) {
@@ -200,27 +225,16 @@ async function handleApi(req, res, url) {
   if (p === "/api/health" || p === "/health") {
     return sendJson(req, res, 200, { ok: true, service: "kyro-cloud-backend", time: Date.now() });
   }
-  if (p === "/api/auth/login" && method === "POST") {
-    const body = await readJson(req);
-    const user = process.env.LUNA_USER || "owner";
-    const pass = process.env.LUNA_PASSWORD || "change-me";
-    if (body.username !== user || body.password !== pass) {
-      return sendJson(req, res, 401, { ok: false, error: "Invalid credentials" });
-    }
-    const token = await signSession(user);
-    res.setHeader(
-      "Set-Cookie",
-      `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 7}`
-    );
-    return sendJson(req, res, 200, { ok: true, data: { user, token } });
-  }
-  if (p === "/api/auth/logout" && method === "POST") {
-    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; Max-Age=0`);
-    return sendJson(req, res, 200, { ok: true });
-  }
+  // NOTE: Authentication (password + Google OAuth) and all user-account data
+  // (profiles, favorites, provider links) are owned by the Vercel frontend
+  // (Next.js serverless + Vercel Postgres). This backend is the runtime/agent
+  // relay only and never touches the user database.
 
-  // Linked provider accounts — persisted on the backend (Render) so the linked
-  // state survives agent restarts and is the source of truth for all clients.
+
+  // Linked provider accounts — relay-only cache for the cloud agent.
+  // The durable, per-user store lives in Vercel Postgres (frontend). This
+  // backend keeps the active user's linked creds in memory so it can relay
+  // them to the agent for installs within the session.
   if (p === "/api/provider/link") {
     const svcKey = process.env.BACKEND_SERVICE_KEY;
     const agentToken = req.headers["x-agent-token"];
@@ -231,32 +245,53 @@ async function handleApi(req, res, url) {
       const u = await requireAuth(req, res);
       if (!u) return;
     }
+    const mgr = getManager();
+
     if (method === "POST") {
       const body = await readJson(req);
       if (!body || !body.provider) return sendJson(req, res, 400, { ok: false, error: "Missing provider" });
       const provider = body.provider;
-      linkedAccounts[provider] = {
+      const record = {
         username: body.username || "",
         password: body.password || "",
         accountId: body.accountId || "",
         accessToken: body.accessToken || "",
         refreshToken: body.refreshToken || "",
+        error: body.error || "",
         linkedAt: Date.now(),
       };
-      persistLinked();
-      // Notify all clients that this provider is now linked (drives the UI everywhere).
-      getManager().broadcast({ type: "provider.login.result", payload: { provider, ok: true, username: body.username || undefined }, ts: Date.now() });
+      // Runtime cache for agent relay (plaintext, in-memory only).
+      activeLinked[provider] = record;
+      if (mgr.activeUserId == null) {
+        const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+        const u = await verifySession(tok);
+        if (u && u.userId != null) mgr.activeUserId = u.userId;
+      }
+      // Persist to Vercel Postgres (durable) unless this call already came from
+      // Vercel (service key), which would create a relay loop.
+      if (!authedByService && mgr.activeUserId != null) {
+        persistLinkedToVercel(provider, record, mgr.activeUserId).catch(() => {});
+      }
+      mgr.broadcast({
+        type: "provider.login.result",
+        payload: { provider, ok: true, username: body.username || undefined, error: body.error || undefined },
+        ts: Date.now(),
+      });
       if (provider === "steam") {
-        getManager().broadcast({ type: "provider.entitlement", payload: { provider: "steam", username: body.username, appIds: [] }, ts: Date.now() });
+        mgr.broadcast({
+          type: "provider.entitlement",
+          payload: { provider: "steam", username: body.username, appIds: [] },
+          ts: Date.now(),
+        });
       }
       // Relay to the cloud agent so installs run under this account.
-      getManager().sendToAgent({ type: "provider.linked", payload: body });
+      mgr.sendToAgent({ type: "provider.linked", payload: record });
       return sendJson(req, res, 200, { ok: true });
     }
     if (method === "GET") {
       const provider = url.searchParams.get("provider");
-      if (provider) return sendJson(req, res, 200, { ok: true, data: linkedAccounts[provider] || null });
-      return sendJson(req, res, 200, { ok: true, data: linkedAccounts });
+      if (provider) return sendJson(req, res, 200, { ok: true, data: activeLinked[provider] || null });
+      return sendJson(req, res, 200, { ok: true, data: activeLinked });
     }
     return sendJson(req, res, 405, { ok: false, error: "Method not allowed" });
   }

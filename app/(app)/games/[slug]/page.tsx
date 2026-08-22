@@ -8,7 +8,7 @@ import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
 import { runtimeAction, runtimeRefreshStream, runtimeStore } from "@/lib/runtime/store";
-import { isFavorite, toggleFavorite as toggleFavoriteStore } from "@/lib/favorites";
+import { isFavorite, toggleFavorite as toggleFavoriteStore, loadFavorites } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
 
 function makeShareUid(): string {
@@ -149,7 +149,10 @@ export default function GameDetailsPage() {
   const [shareCopied, setShareCopied] = useState(false);
 
   useEffect(() => {
-    if (game) setFavorite(isFavorite(game.id));
+    if (!game) return;
+    loadFavorites()
+      .then(() => setFavorite(isFavorite(game.id)))
+      .catch(() => setFavorite(isFavorite(game.id)));
   }, [game?.id]);
 
   const toggleFavorite = useCallback(() => {

@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession, SESSION_COOKIE } from "./lib/auth/jwt";
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/games/screenshots", "/api/providers/steam/callback", "/api/providers/epic/callback", "/api/providers/gog/callback"];
+const PUBLIC_PATHS = ["/login", "/callback", "/api/auth/login", "/api/auth/logout", "/api/auth/google", "/api/auth/google/callback", "/api/health", "/api/games/screenshots", "/api/providers/steam/callback", "/api/providers/epic/callback", "/api/providers/gog/callback"];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
   if (/^\/api\/providers\/[^/]+\/(login|logout|callback)$/.test(pathname)) return true;
-  // Specific callback paths for OAuth providers
   if (/^\/api\/providers\/(steam|epic|gog)\/callback$/.test(pathname)) return true;
   return false;
+}
+
+// The backend (Render) forwards provider links to this Vercel route with a
+// shared service key; allow those without a user session.
+function isServiceKeyRequest(req: NextRequest): boolean {
+  const key = process.env.BACKEND_SERVICE_KEY;
+  if (!key) return false;
+  const provided = req.headers.get("x-service-key");
+  return !!provided && provided === key;
 }
 
 function applyCors(res: NextResponse, origin: string | null) {
@@ -43,6 +51,9 @@ export async function middleware(req: NextRequest) {
   if (isPublicPath(pathname)) return res;
 
   if (pathname.startsWith("/api/")) {
+    // Backend→Vercel service calls (e.g. persisting provider links) are
+    // authenticated by a shared service key rather than a user session.
+    if (isServiceKeyRequest(req)) return res;
     const session = await verifySession(getRequestToken(req));
     if (!session) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
