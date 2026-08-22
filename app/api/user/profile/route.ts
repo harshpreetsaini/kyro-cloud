@@ -21,7 +21,15 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     data: {
-      user: account ? { id: account.id, email: account.email, name: account.name, avatar: account.avatar } : null,
+      user: account
+        ? {
+            id: account.id,
+            email: account.email,
+            name: account.name,
+            avatar: account.avatar,
+            method: account.google_sub ? "google" : "password",
+          }
+        : null,
       profile,
     },
   });

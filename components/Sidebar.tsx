@@ -29,10 +29,16 @@ const NAV = [
       { href: "/settings", label: "Settings", icon: "⚙" },
     ],
   },
+  {
+    label: "Account",
+    items: [
+      { href: "/profile", label: "Profile", icon: "👤" },
+    ],
+  },
 ];
 
 const ICONS: Record<string, string> = {
-  "/home": "⌂", "/games": "🎮", "/library": "▣", "/favorites": "♥", "/settings": "⚙",
+  "/home": "⌂", "/games": "🎮", "/library": "▣", "/favorites": "♥", "/settings": "⚙", "/profile": "👤",
 };
 
 export function Sidebar() {
