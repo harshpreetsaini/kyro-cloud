@@ -30,7 +30,7 @@ export default function LoginPage() {
       setToken(data.data.token);
       setSessionCookie(data.data.token);
       await loadFavorites();
-      router.push("/dashboard");
+      router.push("/home");
     } else {
       setError("Invalid credentials");
       setLoading(false);

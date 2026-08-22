@@ -24,7 +24,7 @@ function GoogleCallbackInner() {
     loadFavorites()
       .catch(() => {})
       .finally(() => {
-        router.replace("/dashboard");
+        router.replace("/home");
       });
   }, [params, router]);
 
