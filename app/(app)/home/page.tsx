@@ -72,7 +72,7 @@ function LazySection({ children }: { children: React.ReactNode }) {
     ob.observe(el);
     return () => ob.disconnect();
   }, []);
-  return <div ref={ref}>{visible ? children : <SkeletonRow />}</div>;
+  return <div ref={ref} className="cv-auto">{visible ? children : <SkeletonRow />}</div>;
 }
 
 const ROWS: { key: string; label: string; href: string; query: string; hint?: string; limit?: number }[] = [
@@ -125,7 +125,7 @@ export default function HomePage() {
         <section className="relative h-[380px] rounded-2xl overflow-hidden group">
           <div key={fg.id} className="absolute inset-0 animate-fadeIn">
             {fg.heroImage ? (
-              <img src={fg.heroImage} alt="" className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+              <img src={fg.heroImage} alt="" fetchPriority={idx === 0 ? "high" : "auto"} decoding={idx === 0 ? "sync" : "async"} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
             ) : fg.coverImage ? (
               <img src={fg.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-60" />
             ) : (

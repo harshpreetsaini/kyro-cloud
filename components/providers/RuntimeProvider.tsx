@@ -10,8 +10,13 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   useEffect(() => {
-    ensureConnected();
+    // Auth check is synchronous/local — never delay it.
     if (!getToken() && pathname !== "/login") router.replace("/login");
+    // The WS handshake competes with page data on slow (mobile) radios —
+    // start it once the browser is idle instead of on mount.
+    const w = window as any;
+    if (typeof w.requestIdleCallback === "function") w.requestIdleCallback(() => ensureConnected(), { timeout: 2000 });
+    else setTimeout(ensureConnected, 400);
   }, [pathname, router]);
 
   return <>{children}</>;
