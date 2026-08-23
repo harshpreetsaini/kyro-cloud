@@ -2,6 +2,7 @@
 
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Card, Stat, fmt, Badge } from "@/components/ui";
+import { ArrowUpIcon, ArrowDownIcon } from "@/components/icons";
 import type { NetworkQuality } from "@shared/types";
 
 function fmtBps(bps?: number | null): string {
@@ -56,9 +57,14 @@ export function SystemStatsPanel() {
       <Stat
         label="Network"
         value={
-          net?.upBps != null || net?.downBps != null
-            ? `↑${fmtBps(net.upBps)} ↓${fmtBps(net.downBps)}`
-            : fmt(net?.pingMs, "ms")
+          net?.upBps != null || net?.downBps != null ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-0.5"><ArrowUpIcon className="w-3 h-3 text-accent" />{fmtBps(net.upBps)}</span>
+              <span className="inline-flex items-center gap-0.5"><ArrowDownIcon className="w-3 h-3 text-tertiary" />{fmtBps(net.downBps)}</span>
+            </span>
+          ) : (
+            fmt(net?.pingMs, "ms")
+          )
         }
         sub={
           net?.quality ? (

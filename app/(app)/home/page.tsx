@@ -7,6 +7,7 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, SkeletonRow } from "@/components/ui";
+import { StarIcon } from "@/components/icons";
 import type { GameEntry } from "@shared/types";
 
 // Scroll-reveal wrapper: fades + slides content up as it enters the viewport.
@@ -147,8 +148,8 @@ export default function HomePage() {
                       </span>
                     ))}
                   {fg.rating && (
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">
-                      ★ {Number(fg.rating).toFixed(1)}
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium flex items-center gap-1 w-fit">
+                      <StarIcon className="w-2.5 h-2.5 fill-yellow-400" /> {Number(fg.rating).toFixed(1)}
                     </span>
                   )}
                   {fg.isFree && (

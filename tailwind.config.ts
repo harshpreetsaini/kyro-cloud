@@ -14,6 +14,7 @@ const config: Config = {
         secondary: "var(--color-secondary)",
         accent: "var(--color-accent)",
         "accent-soft": "var(--color-accent-soft)",
+        tertiary: "var(--color-tertiary)",
         text: "var(--color-text)",
         muted: "var(--color-muted)",
         danger: "var(--color-danger)",
@@ -28,6 +29,15 @@ const config: Config = {
       borderRadius: {
         lg: "12px",
         xl: "20px",
+        "2xl": "26px",
+        "3xl": "34px",
+      },
+      boxShadow: {
+        clay: "inset 2px 2px 6px rgba(255,255,255,0.06), inset -3px -3px 8px rgba(0,0,0,0.45), 0 14px 30px -10px rgba(0,0,0,0.55)",
+        "clay-sm": "inset 1px 1px 3px rgba(255,255,255,0.05), inset -2px -2px 5px rgba(0,0,0,0.4), 0 8px 18px -8px rgba(0,0,0,0.55)",
+        "clay-inset": "inset 2px 2px 5px rgba(0,0,0,0.5), inset -1px -1px 3px rgba(255,255,255,0.04)",
+        "glow-primary": "0 0 18px rgba(148,204,255,0.30)",
+        "glow-secondary": "0 0 18px rgba(255,184,112,0.30)",
       },
       keyframes: {
         "fade-in": {

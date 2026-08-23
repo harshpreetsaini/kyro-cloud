@@ -7,6 +7,7 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, SkeletonCard, EmptyState } from "@/components/ui";
+import { GamesIcon } from "@/components/icons";
 import type { GameEntry } from "@shared/types";
 import { Suspense } from "react";
 
@@ -130,7 +131,7 @@ function GamesPage() {
         </div>
       ) : filteredGames.length === 0 ? (
         <EmptyState
-          icon="🎮"
+          icon={<GamesIcon className="w-7 h-7" />}
           title={search || filter !== "all" || genre ? "NO GAMES MATCH" : "NO GAMES FOUND"}
           description={search || filter !== "all" || genre ? "Try adjusting your search or filters." : "Check back later for new games."}
           action={(search || filter !== "all" || genre) ? (

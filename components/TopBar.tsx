@@ -35,7 +35,7 @@ export function TopBar() {
   })();
 
   return (
-    <header className="h-14 shrink-0 border-b border-white/5 flex items-center justify-between px-4 gap-3">
+    <header className="h-14 shrink-0 border-b border-white/5 bg-bg/70 backdrop-blur-xl flex items-center justify-between px-4 gap-3 sticky top-0 z-20">
       <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={() => sidebarStore.toggle()}
@@ -51,7 +51,7 @@ export function TopBar() {
 
       <div className="flex items-center gap-3 text-sm shrink-0">
         {/* Cloud status */}
-        <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-secondary/60">
+        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-secondary/60 border border-white/5">
           <div className={`w-2 h-2 rounded-full ${connected ? "bg-success" : "bg-muted"}`} />
           <span className="text-[11px] text-muted font-medium">
             {statusText}

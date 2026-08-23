@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Card, Badge, Button } from "@/components/ui";
 import { ControllerStatus } from "@/components/ControllerStatus";
+import { CheckIcon, XIcon } from "@/components/icons";
 
 export default function DiagnosticsPage() {
   const { session, systemInfo, stats, stream, connected, restart } = useRuntime();
@@ -67,7 +68,7 @@ export default function DiagnosticsPage() {
               <p className="font-medium">{r.label}</p>
               <p className="text-[11px] text-muted truncate max-w-[16rem]">{r.detail}</p>
             </div>
-            {r.ok ? <Badge tone="success">✓</Badge> : <Badge tone="danger">✕</Badge>}
+            {r.ok ? <Badge tone="success" className="inline-flex items-center gap-1"><CheckIcon className="w-3 h-3" /> OK</Badge> : <Badge tone="danger" className="inline-flex items-center gap-1"><XIcon className="w-3 h-3" /> Fail</Badge>}
           </button>
         ))}
       </div>
@@ -83,7 +84,7 @@ export default function DiagnosticsPage() {
             {streamSteps.map((s) => (
               <div key={s.label} className="flex items-center justify-between text-sm panel !bg-secondary/50 px-3 py-2">
                 <span>{s.label}</span>
-                {s.ok ? <Badge tone="success">✓</Badge> : <Badge tone="danger">✕</Badge>}
+                {s.ok ? <Badge tone="success" className="inline-flex items-center gap-1"><CheckIcon className="w-3 h-3" /> OK</Badge> : <Badge tone="danger" className="inline-flex items-center gap-1"><XIcon className="w-3 h-3" /> Fail</Badge>}
               </div>
             ))}
           </div>

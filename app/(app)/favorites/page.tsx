@@ -6,6 +6,7 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { SkeletonCard, EmptyState, Button } from "@/components/ui";
+import { FavoritesIcon } from "@/components/icons";
 import type { GameEntry } from "@shared/types";
 import Link from "next/link";
 import { loadFavorites } from "@/lib/favorites";
@@ -45,7 +46,7 @@ export default function FavoritesPage() {
         </div>
       ) : favoriteGames.length === 0 ? (
         <EmptyState
-          icon="♥"
+          icon={<FavoritesIcon className="w-7 h-7" />}
           title="NO FAVORITES YET"
           description="Save games you want to play later."
           action={<Link href="/games"><Button variant="secondary">Browse Games</Button></Link>}

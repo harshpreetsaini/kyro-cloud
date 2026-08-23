@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import type { RuntimeState } from "@shared/types";
 import { RUNTIME_STATES } from "@shared/constants";
+import { CheckIcon, XIcon, PackageOpenIcon } from "@/components/icons";
 
 export function Button({
   children,
@@ -20,10 +21,10 @@ export function Button({
   title?: string;
 }) {
   const styles: Record<string, string> = {
-    primary: "bg-accent text-white hover:brightness-110 shadow-[0_4px_20px_-8px_rgba(124,92,255,0.6)]",
-    secondary: "bg-secondary text-text hover:bg-[#1c2230] border border-white/10",
+    primary: "bg-accent text-bg font-semibold hover:brightness-105 shadow-glow-primary",
+    secondary: "bg-secondary text-text hover:bg-surface-bright border border-white/5",
     ghost: "bg-transparent text-muted hover:text-text hover:bg-secondary",
-    danger: "bg-danger/90 text-white hover:bg-danger",
+    danger: "bg-danger-container text-[#ffdad6] hover:brightness-110",
   };
   const sizes: Record<string, string> = {
     sm: "px-3 py-1.5 text-xs",
@@ -35,7 +36,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`rounded-lg font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]} ${sizes[size]} ${className}`}
+      className={`clay-btn rounded-xl font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]} ${sizes[size]} ${className}`}
     >
       {children}
     </button>
@@ -97,9 +98,9 @@ export function Badge({ children, tone = "neutral", className = "" }: { children
   const tones: Record<string, string> = {
     neutral: "bg-secondary text-muted",
     accent: "bg-accent/15 text-accent",
-    success: "bg-[#45e0a8]/15 text-[#45e0a8]",
-    warning: "bg-[#ffc857]/15 text-[#ffc857]",
-    danger: "bg-[#ff5c72]/15 text-[#ff5c72]",
+    success: "bg-success/15 text-success",
+    warning: "bg-warning/15 text-warning",
+    danger: "bg-danger/15 text-danger",
   };
   return <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${tones[tone]} ${className}`}>{children}</span>;
 }
@@ -118,11 +119,11 @@ export function ProgressList({ steps }: { steps: { label: string; status: "pendi
     <div className="flex flex-col gap-2">
       {steps.map((s, i) => (
         <div key={i} className="flex items-center gap-3 text-sm">
-          <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
-            s.status === "done" ? "bg-[#45e0a8] text-bg" : s.status === "active" ? "bg-accent text-white animate-pulse-soft"
-            : s.status === "error" ? "bg-danger text-white" : "bg-secondary text-muted"
+          <span className={`w-4 h-4 rounded-full flex items-center justify-center ${
+            s.status === "done" ? "bg-success text-bg" : s.status === "active" ? "bg-accent text-bg animate-pulse-soft"
+            : s.status === "error" ? "bg-danger-container text-[#ffdad6]" : "bg-secondary text-muted"
           }`}>
-            {s.status === "done" ? "✓" : s.status === "error" ? "✕" : i + 1}
+            {s.status === "done" ? <CheckIcon className="w-2.5 h-2.5" /> : s.status === "error" ? <XIcon className="w-2.5 h-2.5" /> : <span className="text-[10px]">{i + 1}</span>}
           </span>
           <span className={s.status === "pending" ? "text-muted" : "text-text"}>{s.label}</span>
         </div>
@@ -154,10 +155,12 @@ export function StatusPill({ tone, label, sub, pulse }: { tone: string; label: s
   );
 }
 
-export function EmptyState({ icon = "▢", title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
+export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center text-center gap-3 py-16 px-6">
-      <div className="w-16 h-16 rounded-2xl bg-secondary/60 flex items-center justify-center text-2xl text-muted/50">{icon}</div>
+      <div className="w-16 h-16 rounded-2xl clay-inset flex items-center justify-center text-muted/60">
+        {icon ?? <PackageOpenIcon className="w-7 h-7" />}
+      </div>
       <div>
         <p className="font-semibold tracking-wide text-lg">{title}</p>
         {description && <p className="text-sm text-muted mt-1.5 max-w-sm">{description}</p>}

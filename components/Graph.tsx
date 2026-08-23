@@ -52,9 +52,9 @@ export function StatsGraphs({ history }: { history: SystemStats[] }) {
   return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
       <Graph title="GPU" values={pick((s) => s.gpuPct)} />
-      <Graph title="CPU" values={pick((s) => s.cpuPct)} color="#45e0a8" />
-      <Graph title="RAM" values={pick((s) => s.ramUsedMb)} unit="MB" color="#ffc857" />
-      <Graph title="VRAM" values={pick((s) => s.vramUsedMb)} unit="MB" color="#ffc857" />
+      <Graph title="CPU" values={pick((s) => s.cpuPct)} color="#77d9a8" />
+      <Graph title="RAM" values={pick((s) => s.ramUsedMb)} unit="MB" color="#ffb870" />
+      <Graph title="VRAM" values={pick((s) => s.vramUsedMb)} unit="MB" color="#ffb870" />
       <Graph title="FPS" values={pick((s) => s.fps)} color="#7C5CFF" />
       <Graph title="Latency" values={pick((s) => s.latencyMs)} unit="ms" color="#7C5CFF" />
     </div>

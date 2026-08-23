@@ -110,6 +110,33 @@ export function isInstalled(id: string) {
   return !!state.installedGames[id];
 }
 
+// Fire-and-forget: store a provider's synced game list under the logged-in
+// user's Neon profile. Runs in the browser; safe to call from the WS handler.
+function persistProviderLibrary(provider: string, games: { appId: string; name: string }[]) {
+  if (typeof window === "undefined") return;
+  if (!["steam", "epic", "gog"].includes(provider)) return;
+  try {
+    fetch(api(`/api/providers/${provider}/library`), {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader() },
+      body: JSON.stringify({ games }),
+    }).catch(() => {});
+  } catch {}
+}
+
+// Fire-and-forget: persist the installed-game set so the Library shows the
+// correct "Installed" state even before the WS re-detects it on refresh.
+function persistInstalledGames(map: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  try {
+    fetch(api("/api/user/profile"), {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader() },
+      body: JSON.stringify({ installedGames: map }),
+    }).catch(() => {});
+  } catch {}
+}
+
 export function isOwned(appId: string | number | undefined) {
   if (!appId) return false;
   const a = String(appId);
@@ -330,6 +357,7 @@ function connect() {
           for (const id of ids) next[id] = true;
           state = { ...state, installedGames: next };
           for (const id of ids) markDbInstalled(id);
+          persistInstalledGames(next);
           emit();
         }
         break;
@@ -364,14 +392,19 @@ function connect() {
       case "provider.library": {
         const p = event.payload as { provider?: string; games?: { appId: string; name?: string }[] };
         if (p.provider && Array.isArray(p.games)) {
+          const games = p.games.map((g) => ({ appId: String(g.appId), name: g.name || `App ${g.appId}` }));
           state = {
             ...state,
             providerGames: {
               ...state.providerGames,
-              [p.provider]: p.games.map((g) => ({ appId: String(g.appId), name: g.name || `App ${g.appId}` })),
+              [p.provider]: games,
             },
           };
           emit();
+          // Persist every synced library to the user's Neon profile so the
+          // Library survives refreshes and shows all owned games regardless of
+          // download state (requirement: synced games remain visible).
+          persistProviderLibrary(p.provider, games);
         }
         break;
       }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { Button, ProgressList, EmptyState, Badge, Spinner } from "@/components/ui";
+import { XIcon } from "@/components/icons";
 import type { RuntimeState } from "@shared/types";
 
 export type CloudPhase = "offline" | "ready" | "starting" | "error" | "online";
@@ -98,7 +99,9 @@ export function ErrorHero() {
 
   return (
     <div className="flex flex-col items-center justify-center text-center gap-4 py-12">
-      <div className="w-14 h-14 rounded-2xl bg-danger/15 flex items-center justify-center text-2xl text-danger">✕</div>
+      <div className="w-14 h-14 rounded-2xl bg-danger/15 flex items-center justify-center text-danger">
+        <XIcon className="w-7 h-7" />
+      </div>
       <div>
         <p className="font-display text-lg tracking-wide text-danger">CLOUD PC UNAVAILABLE</p>
         <p className="text-sm text-muted mt-1 max-w-md">

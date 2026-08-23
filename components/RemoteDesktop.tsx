@@ -6,6 +6,7 @@ import { wsUrl } from "@/lib/config/api";
 import { WebRTCViewer } from "./WebRTCViewer";
 import { GStreamerViewer } from "./GStreamerViewer";
 import { ClipboardToolbar } from "./ClipboardToolbar";
+import { MonitorPlayIcon, MonitorIcon } from "@/components/icons";
 
 export function RemoteDesktop({ className = "" }: { className?: string }) {
   const { stream } = useRuntime();
@@ -41,7 +42,9 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
   if (!stream) {
     return (
       <div className={`flex flex-col items-center justify-center bg-black/60 text-center gap-2 text-muted text-sm px-6 ${className}`}>
-        <div className="w-12 h-12 rounded-2xl bg-secondary flex items-center justify-center text-xl">▣</div>
+        <div className="w-12 h-12 rounded-2xl clay-inset flex items-center justify-center">
+          <MonitorPlayIcon className="w-6 h-6" />
+        </div>
         <p className="font-medium text-text">No active cloud session</p>
         <p className="max-w-xs">Start your Cloud PC to access your remote desktop.</p>
       </div>
@@ -51,7 +54,9 @@ export function RemoteDesktop({ className = "" }: { className?: string }) {
   if ((stream as any).simulated) {
     return (
       <div className={`flex flex-col items-center justify-center bg-gradient-to-br from-secondary to-bg text-center gap-3 ${className}`}>
-        <div className="w-16 h-16 rounded-2xl bg-accent/20 flex items-center justify-center text-2xl">🖥</div>
+        <div className="w-16 h-16 rounded-2xl bg-accent/20 flex items-center justify-center">
+          <MonitorIcon className="w-8 h-8 text-accent" />
+        </div>
         <p className="text-text font-medium">Simulated Desktop</p>
         <p className="text-xs text-muted max-w-xs">
           No real display is attached in this mode. Set COMPUTE_PROVIDER=local and install tigervnc + xfce4

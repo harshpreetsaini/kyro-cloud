@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { GameEntry } from "@shared/types";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
+import { StarIcon, GamesIcon, CheckIcon } from "@/components/icons";
 
 export function GameCard({
   game,
@@ -23,9 +24,10 @@ export function GameCard({
   const [imgError, setImgError] = useState(false);
   const [hovered, setHovered] = useState(false);
   const { isInstalled } = useRuntime();
-  const installed = isInstalled(game.id);
   const _istate = (game as any).installState as string | undefined;
-  const installing = !!_istate && !["idle", "ready", "error", "uninstalling"].includes(_istate);
+  const installed = isInstalled(game.id) || _istate === "installed";
+  const installing = _istate === "downloading";
+  const percent = (_istate === "downloading" ? (game as any).percent : undefined) as number | undefined;
   const primaryProvider = game.providers?.[0];
 
   // Estimate download size based on game type
@@ -57,7 +59,7 @@ export function GameCard({
   return (
     <Link href={`/games/${game.slug}`}>
       <div
-        className="group relative flex flex-col overflow-hidden rounded-lg bg-surface border border-white/5 hover:border-accent/30 transition-all duration-200 hover:scale-[1.02] cursor-pointer"
+        className="group relative flex flex-col overflow-hidden rounded-2xl bg-surface clay-sm hover:shadow-clay hover:border-accent/30 transition-all duration-200 hover:scale-[1.02] cursor-pointer"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
@@ -90,7 +92,8 @@ export function GameCard({
           {/* Rating badge — top right */}
           {typeof game.rating === "number" && !isNaN(game.rating) && !game.isFree && (
             <span className="absolute top-1.5 right-1.5 text-[10px] text-yellow-400 bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm font-medium flex items-center gap-0.5">
-              ★ {game.rating.toFixed(1)}
+              <StarIcon className="w-2.5 h-2.5 fill-yellow-400" />
+              {game.rating.toFixed(1)}
             </span>
           )}
 
@@ -111,9 +114,9 @@ export function GameCard({
                 >
                   Play
                 </button>
-              ) : installing ? (
+               ) : installing ? (
                 <span className="bg-white/20 backdrop-blur-sm text-white font-medium px-4 py-1.5 rounded-lg text-sm">
-                  Installing…
+                  Downloading…
                 </span>
               ) : onInstall ? (
                 <button
@@ -135,13 +138,15 @@ export function GameCard({
             <div className="absolute bottom-1.5 left-1.5 right-1.5">
               <div className="bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full border-2 border-white/30 border-t-accent animate-spin" />
-                <span className="text-[9px] text-white/80">Installing</span>
+                <span className="text-[9px] text-white/80">Downloading {percent != null ? `${Math.round(percent)}%` : ""}</span>
               </div>
             </div>
           )}
           {running && !installing && (
             <div className="absolute bottom-1.5 left-1.5">
-              <span className="text-[9px] bg-success/90 text-white px-1.5 py-0.5 rounded font-medium">● Running</span>
+              <span className="text-[9px] bg-success/90 text-bg px-1.5 py-0.5 rounded font-medium flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-bg" /> Running
+              </span>
             </div>
           )}
         </div>
@@ -169,20 +174,24 @@ export function GameCard({
             )}
             <span className="text-[9px] text-muted/60">{size}</span>
             {game.controllerSupport === "full" && (
-              <span className="text-[9px] text-muted/60" title="Full controller support">🎮</span>
+              <span title="Full controller support" className="inline-flex">
+                <GamesIcon className="w-2.5 h-2.5 text-muted/60" />
+              </span>
             )}
           </div>
 
           {/* Status */}
           <div className="flex items-center justify-between mt-0.5">
             {installing ? (
-              <span className="text-[9px] text-muted">Installing...</span>
+              <span className="text-[9px] text-accent">⟳ Downloading {percent != null ? `${Math.round(percent)}%` : "…"}</span>
             ) : running ? (
-              <span className="text-[9px] text-success font-medium">● Running</span>
-            ) : installing ? (
-              <span className="text-[9px] text-accent">⟳ Installing…</span>
+              <span className="text-[9px] text-success font-medium flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-success" /> Running
+              </span>
             ) : installed ? (
-              <span className="text-[9px] text-success">● Installed</span>
+              <span className="text-[9px] text-success flex items-center gap-1">
+                <CheckIcon className="w-2 h-2" /> Installed
+              </span>
             ) : game.isFree ? (
               <span className="text-[9px] text-green-400 font-medium">Free</span>
             ) : onInstall ? (

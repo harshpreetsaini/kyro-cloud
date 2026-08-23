@@ -8,6 +8,10 @@ import { api } from "@/lib/config/api";
 import { authHeader, setToken } from "@/lib/auth/client";
 import { GameCard } from "@/components/GameCard";
 import { Button, Card, Stat, Badge, EmptyState, SkeletonCard, SectionTitle } from "@/components/ui";
+import { ProviderLogo } from "@/components/ProviderLogo";
+import {
+  FavoritesIcon, LibraryIcon, KeyIcon, CheckIcon,
+} from "@/components/icons";
 import type { GameEntry } from "@shared/types";
 
 type ProviderInfo = { username?: string; accountId?: string; linkedAt?: number; error?: string };
@@ -27,9 +31,9 @@ type UserData = {
 };
 
 const PROVIDERS = [
-  { id: "steam", label: "Steam", icon: "🟦" },
-  { id: "epic", label: "Epic Games", icon: "🟪" },
-  { id: "gog", label: "GOG", icon: "🟩" },
+  { id: "steam", label: "Steam" },
+  { id: "epic", label: "Epic Games" },
+  { id: "gog", label: "GOG" },
 ];
 
 function initials(name?: string | null, email?: string | null) {
@@ -118,9 +122,9 @@ export default function ProfilePage() {
           <p className="text-sm text-muted truncate">{user?.email || "Local owner account"}</p>
           <div className="mt-2 flex items-center justify-center sm:justify-start gap-2">
             {user?.method === "google" ? (
-              <Badge tone="accent">🔗 Signed in with Google</Badge>
+              <Badge tone="accent" className="inline-flex items-center gap-1"><CheckIcon className="w-3 h-3" /> Signed in with Google</Badge>
             ) : (
-              <Badge tone="neutral">🔑 Password account</Badge>
+              <Badge tone="neutral" className="inline-flex items-center gap-1"><KeyIcon className="w-3 h-3" /> Password account</Badge>
             )}
           </div>
         </div>
@@ -155,7 +159,7 @@ export default function ProfilePage() {
               <Card key={p.id} className="p-4 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <span className="flex items-center gap-2 font-medium">
-                    <span>{p.icon}</span>
+                    <ProviderLogo id={p.id} className="w-4.5 h-4.5 w-[18px] h-[18px]" />
                     {p.label}
                   </span>
                   {linked ? (
@@ -186,7 +190,7 @@ export default function ProfilePage() {
         </SectionTitle>
         {favGames.length === 0 ? (
           <EmptyState
-            icon="♥"
+            icon={<FavoritesIcon className="w-7 h-7" />}
             title="NO FAVORITES YET"
             description="Games you favorite are saved to your account and sync across devices."
             action={<Link href="/games"><Button variant="secondary">Browse Games</Button></Link>}
@@ -213,7 +217,7 @@ export default function ProfilePage() {
         </SectionTitle>
         {installedList.length === 0 ? (
           <EmptyState
-            icon="▣"
+            icon={<LibraryIcon className="w-7 h-7" />}
             title="NOTHING INSTALLED"
             description="Install games from the library and they'll show up here."
             action={<Link href="/games"><Button variant="secondary">Browse Games</Button></Link>}

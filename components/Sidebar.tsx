@@ -5,41 +5,41 @@ import { usePathname } from "next/navigation";
 import { useSyncExternalStore, useEffect } from "react";
 import { APP_NAME } from "@/lib/config/branding";
 import { sidebarStore } from "@/lib/ui/sidebar";
+import {
+  HomeIcon, GamesIcon, LibraryIcon, FavoritesIcon, ProvidersIcon,
+  PerformanceIcon, SettingsIcon, ProfileIcon, CollapseIcon, ExpandIcon,
+} from "@/components/icons";
 
 const NAV = [
   {
     label: "Home",
     items: [
-      { href: "/home", label: "Home", icon: "⌂" },
-      { href: "/games", label: "All Games", icon: "🎮" },
+      { href: "/home", label: "Home", icon: HomeIcon },
+      { href: "/games", label: "All Games", icon: GamesIcon },
     ],
   },
   {
     label: "Library",
     items: [
-      { href: "/library", label: "My Library", icon: "▣" },
-      { href: "/favorites", label: "Favorites", icon: "♥" },
-      { href: "/providers", label: "Providers", icon: "🔗" },
+      { href: "/library", label: "My Library", icon: LibraryIcon },
+      { href: "/favorites", label: "Favorites", icon: FavoritesIcon },
+      { href: "/providers", label: "Providers", icon: ProvidersIcon },
     ],
   },
   {
     label: "System",
     items: [
-      { href: "/performance", label: "Performance", icon: "📊" },
-      { href: "/settings", label: "Settings", icon: "⚙" },
+      { href: "/performance", label: "Performance", icon: PerformanceIcon },
+      { href: "/settings", label: "Settings", icon: SettingsIcon },
     ],
   },
   {
     label: "Account",
     items: [
-      { href: "/profile", label: "Profile", icon: "👤" },
+      { href: "/profile", label: "Profile", icon: ProfileIcon },
     ],
   },
 ];
-
-const ICONS: Record<string, string> = {
-  "/home": "⌂", "/games": "🎮", "/library": "▣", "/favorites": "♥", "/settings": "⚙", "/profile": "👤",
-};
 
 export function Sidebar() {
   const path = usePathname();
@@ -72,7 +72,7 @@ export function Sidebar() {
           className="hidden lg:flex absolute -right-3 top-16 w-6 h-6 rounded-full bg-surface border border-white/10 items-center justify-center text-muted hover:text-text hover:bg-secondary transition-colors z-50"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          <span className="text-[10px]">{collapsed ? "▶" : "◀"}</span>
+          {collapsed ? <ExpandIcon className="w-3 h-3" /> : <CollapseIcon className="w-3 h-3" />}
         </button>
 
         {/* Nav */}
@@ -84,16 +84,17 @@ export function Sidebar() {
               )}
               {group.items.map((item) => {
                 const active = path === item.href || path.startsWith(item.href + "/");
+                const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
                     title={collapsed ? item.label : undefined}
-                    className={`flex items-center gap-2.5 ${collapsed ? "justify-center" : ""} px-2.5 py-2 rounded-lg text-sm transition-all ${
-                      active ? "bg-accent/15 text-accent" : "text-muted hover:text-text hover:bg-secondary"
+                    className={`flex items-center gap-2.5 ${collapsed ? "justify-center" : ""} px-2.5 py-2 rounded-xl text-sm transition-all ${
+                      active ? "clay-inset text-accent" : "text-muted hover:text-text hover:bg-secondary"
                     }`}
                   >
-                    <span className={`w-5 h-5 flex items-center justify-center text-[13px] ${active ? "text-accent" : ""}`}>{item.icon}</span>
+                    <Icon className={`w-[18px] h-[18px] shrink-0 ${active ? "text-accent" : ""}`} />
                     {!collapsed && <span>{item.label}</span>}
                   </Link>
                 );

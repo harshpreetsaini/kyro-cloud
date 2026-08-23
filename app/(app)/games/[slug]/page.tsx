@@ -7,6 +7,9 @@ import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
+import {
+  StarIcon, CheckIcon, HeartIcon, PlayIcon, DownloadIcon, ShareIcon,
+} from "@/components/icons";
 import { runtimeAction, runtimeRefreshStream, runtimeStore } from "@/lib/runtime/store";
 import { isFavorite, toggleFavorite as toggleFavoriteStore, loadFavorites } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
@@ -267,7 +270,9 @@ export default function GameDetailsPage() {
                 <span key={g.id ?? i} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name || g}</span>
               ))}
               {game.rating && (
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium">★ {Number(game.rating).toFixed(1)}</span>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium flex items-center gap-1 w-fit">
+                  <StarIcon className="w-2.5 h-2.5 fill-yellow-400" /> {Number(game.rating).toFixed(1)}
+                </span>
               )}
               {game.metacritic && (
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent/20 text-accent font-medium">MC {game.metacritic}</span>
@@ -287,9 +292,9 @@ export default function GameDetailsPage() {
             {launchSteps.map((step, i) => (
               <div key={i} className="flex items-center gap-3 text-sm">
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 ${
-                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-white animate-pulse-soft" : "bg-secondary text-muted"
+                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-bg animate-pulse-soft" : "bg-secondary text-muted"
                 }`}>
-                  {step.status === "done" ? "✓" : i + 1}
+                  {step.status === "done" ? <CheckIcon className="w-3 h-3" /> : i + 1}
                 </span>
                 <span className={step.status === "pending" ? "text-muted" : "text-text"}>{step.label}</span>
               </div>
@@ -345,8 +350,9 @@ export default function GameDetailsPage() {
       {neededProvider === "steam" && (
         <section className="panel p-6 mb-6">
           {providerLinked?.steam?.ok ? (
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <span>✓ Steam account linked</span>
+            <div className="flex items-center gap-2 text-sm text-success">
+              <CheckIcon className="w-4 h-4" />
+              <span>Steam account linked</span>
               <span className="text-muted">·</span>
               <span className="text-text">{providerLinked.steam.username}</span>
             </div>
@@ -388,8 +394,18 @@ export default function GameDetailsPage() {
             )}
             <div className="flex gap-3">
               {installed || installState === "ready" ? (
-                <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching}>
-                  {isRunning ? "● Running" : isLaunching ? "Starting..." : "Play"}
+                <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching} className="inline-flex items-center gap-2">
+                  {isRunning ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-bg animate-pulse-soft" /> Running
+                    </>
+                  ) : isLaunching ? (
+                    "Starting..."
+                  ) : (
+                    <>
+                      <PlayIcon className="w-4 h-4 fill-current" /> Play
+                    </>
+                  )}
                 </Button>
               ) : isInstallingNow ? (
                 <Button size="lg" variant="secondary" disabled>
@@ -400,16 +416,19 @@ export default function GameDetailsPage() {
                     : "Verifying installation..."}
                 </Button>
               ) : game.isFree ? (
-                <Button size="lg" onClick={handleInstall}>
+                <Button size="lg" onClick={handleInstall} className="inline-flex items-center gap-2">
+                  <DownloadIcon className="w-4 h-4" />
                   Install
                 </Button>
               ) : providerConnected ? (
-                <Button size="lg" onClick={handleInstall}>
+                <Button size="lg" onClick={handleInstall} className="inline-flex items-center gap-2">
+                  <DownloadIcon className="w-4 h-4" />
                   Install
                 </Button>
               ) : (
                 <>
-                  <Button size="lg" onClick={handleInstall}>
+                  <Button size="lg" onClick={handleInstall} className="inline-flex items-center gap-2">
+                    <DownloadIcon className="w-4 h-4" />
                     Install
                   </Button>
                   <Link href="/providers" passHref>
@@ -522,7 +541,7 @@ export default function GameDetailsPage() {
               {game.releaseDate && <InfoRow label="Release" value={new Date(game.releaseDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })} />}
               {game.developer && <InfoRow label="Developer" value={game.developer} />}
               {game.publisher && <InfoRow label="Publisher" value={game.publisher} />}
-              {typeof game.rating === "number" && !isNaN(game.rating) && <InfoRow label="Rating" value={`★ ${game.rating.toFixed(1)}`} />}
+              {typeof game.rating === "number" && !isNaN(game.rating) && <InfoRow label="Rating" value={`${game.rating.toFixed(1)} / 5`} />}
               {game.metacritic && <InfoRow label="Metacritic" value={String(game.metacritic)} />}
             </div>
           </div>
@@ -533,7 +552,7 @@ export default function GameDetailsPage() {
               <InfoRow label="Resolution" value="Up to 1080p" />
               <InfoRow label="Target FPS" value="60" />
               <InfoRow label="Controller" value={game.controllerSupport === "full" ? "Full Support" : game.controllerSupport === "none" ? "Not Supported" : "Partial"} />
-              <InfoRow label="Status" value={installed || installState === "ready" ? "✓ Installed" : isInstallingNow ? "⟳ Installing" : "○ Not Installed"} />
+              <InfoRow label="Status" value={installed || installState === "ready" ? "Installed" : isInstallingNow ? "Installing" : "Not Installed"} />
               <InfoRow label="Size" value={game.downloadSize || "— GB"} />
             </div>
           </div>
@@ -543,7 +562,7 @@ export default function GameDetailsPage() {
               <h3 className="text-sm font-semibold mb-3">Launch Provider</h3>
               <div className="flex flex-col gap-2 text-sm">
                 <InfoRow label="Provider" value={primaryProvider.name} />
-                <InfoRow label="Status" value={primaryProvider.availability === "available" ? "✓ Available" : "○ Unavailable"} />
+                <InfoRow label="Status" value={primaryProvider.availability === "available" ? "Available" : "Unavailable"} />
               </div>
             </div>
           )}
@@ -551,11 +570,13 @@ export default function GameDetailsPage() {
           <div className="panel p-4">
             <h3 className="text-sm font-semibold mb-3">Quick Actions</h3>
             <div className="flex flex-col gap-2">
-              <Button variant={favorite ? "primary" : "secondary"} size="sm" className="w-full" onClick={toggleFavorite}>
-                {favorite ? "♥ Favorited" : "♡ Add to Favorites"}
+              <Button variant={favorite ? "primary" : "secondary"} size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={toggleFavorite}>
+                <HeartIcon className={`w-4 h-4 ${favorite ? "fill-current" : ""}`} />
+                {favorite ? "Favorited" : "Add to Favorites"}
               </Button>
-              <Button variant="secondary" size="sm" className="w-full" onClick={shareGame}>
-                {shareCopied ? "✓ Link copied!" : "Share"}
+              <Button variant="secondary" size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={shareGame}>
+                <ShareIcon className="w-4 h-4" />
+                {shareCopied ? "Link copied!" : "Share"}
               </Button>
             </div>
           </div>

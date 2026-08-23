@@ -308,16 +308,16 @@ export default function PerformancePage() {
       {/* Usage bars */}
       <h3 className="font-semibold text-lg">Real-Time Usage</h3>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <Bar label="CPU" value={stats?.cpuPct} tone="bg-[#45e0a8]" />
+        <Bar label="CPU" value={stats?.cpuPct} tone="bg-success" />
         <Bar
           label="RAM"
           value={stats?.ramTotalMb ? ((stats.ramUsedMb || 0) / stats.ramTotalMb) * 100 : null}
-          tone="bg-[#ffc857]"
+          tone="bg-warning"
         />
         <Bar
           label="VRAM"
           value={stats?.vramTotalMb ? ((stats.vramUsedMb || 0) / stats.vramTotalMb) * 100 : null}
-          tone="bg-[#ffc857]"
+          tone="bg-warning"
         />
         <Bar label="GPU" value={stats?.gpuPct} tone="bg-green-500" />
         <Bar label="Stream bitrate" value={stats?.bitrateMbps} suffix=" Mb" tone="bg-accent" />

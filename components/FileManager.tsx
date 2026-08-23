@@ -5,6 +5,9 @@ import type { FileItem } from "@shared/types";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
 import { Button } from "@/components/ui";
+import {
+  UploadIcon, PlusIcon, SyncIcon, FolderIcon, FileIcon, DownloadIcon, PencilIcon, TrashIcon,
+} from "@/components/icons";
 
 function fmtSize(bytes: number | null): string {
   if (bytes == null) return "—";
@@ -191,14 +194,14 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
             placeholder="Search files..."
             className="bg-secondary rounded-lg px-2 py-1 text-sm w-36 focus:outline-none focus:ring-1 focus:ring-accent"
           />
-          <button className="text-xs text-muted hover:text-text px-2 py-1" onClick={() => fileInput.current?.click()} title="Upload">
-            ⤓ Upload
+          <button className="text-xs text-muted hover:text-text px-2 py-1 inline-flex items-center gap-1" onClick={() => fileInput.current?.click()} title="Upload">
+            <UploadIcon className="w-3.5 h-3.5" /> Upload
           </button>
-          <button className="text-xs text-muted hover:text-text px-2 py-1" onClick={() => setNewFolder((v) => !v)} title="New folder">
-            + Folder
+          <button className="text-xs text-muted hover:text-text px-2 py-1 inline-flex items-center gap-1" onClick={() => setNewFolder((v) => !v)} title="New folder">
+            <PlusIcon className="w-3.5 h-3.5" /> Folder
           </button>
           <button className="text-xs text-muted hover:text-text px-2 py-1" onClick={() => load(path)} title="Refresh">
-            ↻
+            <SyncIcon className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
           <input ref={fileInput} type="file" className="hidden" onChange={(e) => onFiles(e.target.files)} />
         </div>
@@ -283,7 +286,7 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
                   }}
                 >
                   <td className="py-2 flex items-center gap-2">
-                    <span>{it.type === "directory" ? "🗀" : "📄"}</span>
+                    {it.type === "directory" ? <FolderIcon className="w-4 h-4 text-warning/80 shrink-0" /> : <FileIcon className="w-4 h-4 text-muted shrink-0" />}
                     {renaming === it.path ? (
                       <input
                         autoFocus
@@ -302,8 +305,8 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
                   <td className="text-right text-muted mono hidden sm:table-cell">{fmtDate(it.modified)}</td>
                   <td className="text-right whitespace-nowrap opacity-0 group-hover:opacity-100">
                     {it.type === "file" && (
-                      <button className="text-xs text-accent mr-2" onClick={(e) => { e.stopPropagation(); download(it); }}>
-                        ↓
+                      <button className="text-xs text-accent mr-2" onClick={(e) => { e.stopPropagation(); download(it); }} title="Download">
+                        <DownloadIcon className="w-3.5 h-3.5" />
                       </button>
                     )}
                     <button
@@ -313,8 +316,9 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
                         setRenaming(it.path);
                         setRenameVal(it.name);
                       }}
+                      title="Rename"
                     >
-                      ✎
+                      <PencilIcon className="w-3.5 h-3.5" />
                     </button>
                     <button
                       className="text-xs text-danger"
@@ -322,8 +326,9 @@ export function FileManager({ basePath = "/" }: { basePath?: string }) {
                         e.stopPropagation();
                         del(it);
                       }}
+                      title="Delete"
                     >
-                      🗑
+                      <TrashIcon className="w-3.5 h-3.5" />
                     </button>
                   </td>
                 </tr>
