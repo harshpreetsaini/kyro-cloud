@@ -134,18 +134,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/providers?error=epic_not_configured", req.url));
   }
   try {
+    const clientSecret = process.env.EPIC_CLIENT_SECRET || "";
+    // Epic (this client) requires the credentials via HTTP Basic auth rather
+    // than a client_secret body param — otherwise it returns invalid_client.
+    const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
     const tokenBody = new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      client_id: clientId,
       redirect_uri: redirectUri,
     });
-    const clientSecret = process.env.EPIC_CLIENT_SECRET || "";
-    if (clientSecret) tokenBody.set("client_secret", clientSecret);
 
     const tokenRes = await fetch("https://account-public-service-prod.ol.epicgames.com/account/api/oauth/token", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basic}`,
+      },
       body: tokenBody,
     });
     const tokenData = await tokenRes.json();
