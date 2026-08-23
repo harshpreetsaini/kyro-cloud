@@ -13,7 +13,6 @@ interface Provider {
   id: string;
   name: string;
   description: string;
-  color: string;
   loggedIn: boolean;
   username?: string;
   gameCount?: number;
@@ -21,15 +20,15 @@ interface Provider {
   installMethod: string;
 }
 
-const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount" | "method" | "installMethod" | "icon">[] = [
-  { id: "steam", name: "Steam", description: "Valve's gaming platform — 50,000+ games", color: "from-blue-600 to-blue-800" },
-  { id: "epic", name: "Epic Games", description: "Epic Games Store — exclusives + free weekly games", color: "from-gray-700 to-gray-900" },
-  { id: "gog", name: "GOG", description: "DRM-free games — you own what you buy", color: "from-purple-600 to-purple-800" },
-  { id: "ubisoft", name: "Ubisoft Connect", description: "Assassin's Creed, Far Cry, Rainbow Six", color: "from-blue-500 to-cyan-600" },
-  { id: "ea", name: "EA App", description: "FIFA, Battlefield, Need for Speed, Jedi", color: "from-blue-700 to-indigo-800" },
-  { id: "xbox", name: "Xbox / Game Pass", description: "Game Pass library — hundreds of games", color: "from-green-600 to-green-800" },
-  { id: "battle", name: "Battle.net", description: "Diablo, WoW, Overwatch, StarCraft", color: "from-blue-600 to-blue-700" },
-  { id: "riot", name: "Riot Client", description: "League of Legends, Valorant, TFT", color: "from-red-600 to-red-800" },
+const PROVIDERS: Omit<Provider, "loggedIn" | "username" | "gameCount" | "method" | "installMethod">[] = [
+  { id: "steam", name: "Steam", description: "Valve's gaming platform — 50,000+ games" },
+  { id: "epic", name: "Epic Games", description: "Epic Games Store — exclusives + free weekly games" },
+  { id: "gog", name: "GOG", description: "DRM-free games — you own what you buy" },
+  { id: "ubisoft", name: "Ubisoft Connect", description: "Assassin's Creed, Far Cry, Rainbow Six" },
+  { id: "ea", name: "EA App", description: "FIFA, Battlefield, Need for Speed, Jedi" },
+  { id: "xbox", name: "Xbox / Game Pass", description: "Game Pass library — hundreds of games" },
+  { id: "battle", name: "Battle.net", description: "Diablo, WoW, Overwatch, StarCraft" },
+  { id: "riot", name: "Riot Client", description: "League of Legends, Valorant, TFT" },
 ];
 
 const CONNECT_LABEL: Record<string, string> = {

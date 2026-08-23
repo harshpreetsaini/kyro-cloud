@@ -62,7 +62,7 @@ export function Sidebar() {
       }`}>
         {/* Logo */}
         <div className={`h-14 flex items-center ${collapsed ? "justify-center" : "gap-2 px-4"} border-b border-white/5 shrink-0`}>
-          <div className="w-8 h-8 rounded-lg bg-accent glow-accent flex items-center justify-center font-bold text-sm shrink-0">K</div>
+          <div className="w-8 h-8 rounded-lg bg-accent glow-accent flex items-center justify-center font-bold text-sm text-on-accent shrink-0">K</div>
           {!collapsed && <span className="font-semibold tracking-tight text-sm">{APP_NAME}</span>}
         </div>
 

@@ -91,15 +91,15 @@ export function GameCard({
 
           {/* Rating badge — top right */}
           {typeof game.rating === "number" && !isNaN(game.rating) && !game.isFree && (
-            <span className="absolute top-1.5 right-1.5 text-[10px] text-yellow-400 bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm font-medium flex items-center gap-0.5">
-              <StarIcon className="w-2.5 h-2.5 fill-yellow-400" />
+            <span className="absolute top-1.5 right-1.5 text-[10px] text-warning bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm font-medium flex items-center gap-0.5">
+              <StarIcon className="w-2.5 h-2.5 fill-warning" />
               {game.rating.toFixed(1)}
             </span>
           )}
 
           {/* Free badge — top right (when no rating) */}
           {game.isFree && !installed && (
-            <span className="absolute top-1.5 right-1.5 text-[9px] text-green-400 bg-green-500/20 px-1.5 py-0.5 rounded backdrop-blur-sm font-bold uppercase">
+            <span className="absolute top-1.5 right-1.5 text-[9px] text-success bg-success/15 px-1.5 py-0.5 rounded backdrop-blur-sm font-bold uppercase">
               Free
             </span>
           )}
@@ -110,7 +110,7 @@ export function GameCard({
               {installed ? (
                 <button
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); onLaunch(game.id); }}
-                  className="bg-accent hover:bg-accent/90 text-white font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
+                  className="bg-accent hover:bg-accent/90 text-on-accent font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
                 >
                   Play
                 </button>
@@ -121,7 +121,7 @@ export function GameCard({
               ) : onInstall ? (
                 <button
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); onInstall(game.id); }}
-                  className="bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
+                  className="bg-success text-bg hover:brightness-110 font-semibold px-5 py-2 rounded-lg shadow-lg transform transition-all duration-200 hover:scale-105 text-sm"
                 >
                   Install
                 </button>
@@ -165,9 +165,9 @@ export function GameCard({
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             {game.metacritic && (
               <span className={`text-[9px] px-1 py-0 rounded font-bold ${
-                game.metacritic >= 75 ? "bg-green-500/20 text-green-400" :
-                game.metacritic >= 50 ? "bg-yellow-500/20 text-yellow-400" :
-                "bg-red-500/20 text-red-400"
+                game.metacritic >= 75 ? "bg-success/15 text-success" :
+                game.metacritic >= 50 ? "bg-warning/15 text-warning" :
+                "bg-danger/15 text-danger"
               }`}>
                 {game.metacritic}
               </span>
@@ -193,9 +193,9 @@ export function GameCard({
                 <CheckIcon className="w-2 h-2" /> Installed
               </span>
             ) : game.isFree ? (
-              <span className="text-[9px] text-green-400 font-medium">Free</span>
+              <span className="text-[9px] text-success font-medium">Free</span>
             ) : onInstall ? (
-              <span className="text-[9px] text-green-400 font-medium">Install</span>
+              <span className="text-[9px] text-success font-medium">Install</span>
             ) : (
               <span className="text-[9px] text-muted">{game.downloadSize || "Buy"}</span>
             )}

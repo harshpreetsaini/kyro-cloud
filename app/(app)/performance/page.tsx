@@ -52,8 +52,8 @@ function GpuCard({ systemInfo }: { systemInfo: any }) {
   return (
     <div className="panel p-5">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500/20 to-green-600/10 flex items-center justify-center">
-          <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-success/20 to-success/10 flex items-center justify-center">
+          <svg className="w-5 h-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>
         </div>
         <div>
           <h3 className="font-semibold">GPU</h3>
@@ -80,8 +80,8 @@ function CpuCard({ systemInfo }: { systemInfo: any }) {
   return (
     <div className="panel p-5">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/10 flex items-center justify-center">
-          <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent/20 to-accent/10 flex items-center justify-center">
+          <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
         </div>
         <div>
           <h3 className="font-semibold">CPU</h3>
@@ -105,8 +105,8 @@ function RamCard({ systemInfo, stats }: { systemInfo: any; stats: any }) {
   return (
     <div className="panel p-5">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-yellow-500/20 to-yellow-600/10 flex items-center justify-center">
-          <svg className="w-5 h-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-warning/20 to-warning/10 flex items-center justify-center">
+          <svg className="w-5 h-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
         </div>
         <div>
           <h3 className="font-semibold">Memory</h3>
@@ -121,7 +121,7 @@ function RamCard({ systemInfo, stats }: { systemInfo: any; stats: any }) {
       </div>
       {pct != null && (
         <div className="mt-3 h-2 bg-secondary rounded-full overflow-hidden">
-          <div className={`h-full transition-all ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-yellow-500" : "bg-green-500"}`} style={{ width: `${pct}%` }} />
+          <div className={`h-full transition-all ${pct > 90 ? "bg-danger" : pct > 70 ? "bg-warning" : "bg-success"}`} style={{ width: `${pct}%` }} />
         </div>
       )}
     </div>
@@ -134,8 +134,8 @@ function StorageCard({ systemInfo }: { systemInfo: any }) {
   return (
     <div className="panel p-5">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-purple-600/10 flex items-center justify-center">
-          <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" /></svg>
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent/20 to-accent/10 flex items-center justify-center">
+          <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" /></svg>
         </div>
         <div>
           <h3 className="font-semibold">Storage</h3>
@@ -151,7 +151,7 @@ function StorageCard({ systemInfo }: { systemInfo: any }) {
       </div>
       {usedPct != null && (
         <div className="mt-3 h-2 bg-secondary rounded-full overflow-hidden">
-          <div className={`h-full transition-all ${usedPct > 90 ? "bg-red-500" : usedPct > 70 ? "bg-yellow-500" : "bg-purple-500"}`} style={{ width: `${usedPct}%` }} />
+          <div className={`h-full transition-all ${usedPct > 90 ? "bg-danger" : usedPct > 70 ? "bg-warning" : "bg-accent"}`} style={{ width: `${usedPct}%` }} />
         </div>
       )}
     </div>
@@ -161,17 +161,17 @@ function StorageCard({ systemInfo }: { systemInfo: any }) {
 function NetworkCard({ systemInfo, stats }: { systemInfo: any; stats: any }) {
   const net = systemInfo?.network;
   const qualityColors: Record<string, string> = {
-    excellent: "text-green-400",
-    good: "text-blue-400",
-    fair: "text-yellow-400",
-    poor: "text-red-400",
+    excellent: "text-success",
+    good: "text-accent",
+    fair: "text-warning",
+    poor: "text-danger",
     unknown: "text-muted",
   };
   return (
     <div className="panel p-5">
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500/20 to-cyan-600/10 flex items-center justify-center">
-          <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" /></svg>
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-tertiary/20 to-tertiary/10 flex items-center justify-center">
+          <svg className="w-5 h-5 text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" /></svg>
         </div>
         <div>
           <h3 className="font-semibold">Network</h3>
@@ -319,12 +319,12 @@ export default function PerformancePage() {
           value={stats?.vramTotalMb ? ((stats.vramUsedMb || 0) / stats.vramTotalMb) * 100 : null}
           tone="bg-warning"
         />
-        <Bar label="GPU" value={stats?.gpuPct} tone="bg-green-500" />
+        <Bar label="GPU" value={stats?.gpuPct} tone="bg-success" />
         <Bar label="Stream bitrate" value={stats?.bitrateMbps} suffix=" Mb" tone="bg-accent" />
         <Bar
           label="Storage"
           value={systemInfo?.storage?.totalMb ? ((systemInfo.storage.usedMb || 0) / systemInfo.storage.totalMb) * 100 : null}
-          tone="bg-purple-500"
+          tone="bg-accent"
         />
       </div>
 

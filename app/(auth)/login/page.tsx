@@ -42,7 +42,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-sm flex flex-col gap-6 animate-fade-in">
         <div className="flex flex-col items-center gap-2.5">
-          <div className="w-14 h-14 rounded-2xl bg-accent glow-accent shadow-glow-primary flex items-center justify-center text-2xl font-display font-extrabold text-bg">
+          <div className="w-14 h-14 rounded-2xl bg-accent glow-accent shadow-glow-primary flex items-center justify-center text-2xl font-display font-extrabold text-on-accent">
             K
           </div>
           <h1 className="font-display text-2xl font-bold tracking-tight">{APP_NAME}</h1>
@@ -72,7 +72,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="clay-btn bg-accent text-bg rounded-xl py-2.5 font-semibold hover:brightness-105 disabled:opacity-50 transition-all"
+            className="clay-btn bg-accent text-on-accent rounded-xl py-2.5 font-semibold hover:brightness-105 disabled:opacity-50 transition-all"
           >
             {loading ? "Signing in…" : "Sign In"}
           </button>

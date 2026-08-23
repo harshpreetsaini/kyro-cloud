@@ -270,8 +270,8 @@ export default function GameDetailsPage() {
                 <span key={g.id ?? i} className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/10 text-white/80 font-medium">{g.name || g}</span>
               ))}
               {game.rating && (
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium flex items-center gap-1 w-fit">
-                  <StarIcon className="w-2.5 h-2.5 fill-yellow-400" /> {Number(game.rating).toFixed(1)}
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning font-medium flex items-center gap-1 w-fit">
+                  <StarIcon className="w-2.5 h-2.5 fill-warning" /> {Number(game.rating).toFixed(1)}
                 </span>
               )}
               {game.metacritic && (
@@ -292,7 +292,7 @@ export default function GameDetailsPage() {
             {launchSteps.map((step, i) => (
               <div key={i} className="flex items-center gap-3 text-sm">
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 ${
-                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-bg animate-pulse-soft" : "bg-secondary text-muted"
+                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-on-accent animate-pulse-soft" : "bg-secondary text-muted"
                 }`}>
                   {step.status === "done" ? <CheckIcon className="w-3 h-3" /> : i + 1}
                 </span>
@@ -460,7 +460,7 @@ export default function GameDetailsPage() {
               </p>
             )}
             {notOwned && (
-              <p className="text-xs text-yellow-400 mt-2">
+              <p className="text-xs text-warning mt-2">
                 This game isn&apos;t in your linked Steam library — installation may fail if you don&apos;t own it.
               </p>
             )}

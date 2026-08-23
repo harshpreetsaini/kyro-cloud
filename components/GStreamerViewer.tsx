@@ -275,7 +275,7 @@ export function GStreamerViewer({
   if (error) {
     return (
       <div className={`flex flex-col items-center justify-center bg-black/60 text-center gap-2 text-muted text-sm px-6 ${className}`}>
-        <p className="text-red-400">{error}</p>
+        <p className="text-danger">{error}</p>
       </div>
     );
   }
@@ -283,7 +283,7 @@ export function GStreamerViewer({
   return (
     <div className={`relative w-full h-full ${className}`}>
       <canvas ref={canvasRef} className="w-full h-full object-contain bg-black" />
-      <div className="absolute top-2 right-2 text-xs bg-black/60 text-green-400 px-2 py-1 rounded font-mono">
+      <div className="absolute top-2 right-2 text-xs bg-black/60 text-success px-2 py-1 rounded font-mono">
         {fps} FPS | {latency}ms | GPU H.264{audioSupported ? " + Opus" : ""}
       </div>
     </div>

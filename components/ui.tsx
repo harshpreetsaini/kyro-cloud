@@ -21,7 +21,7 @@ export function Button({
   title?: string;
 }) {
   const styles: Record<string, string> = {
-    primary: "bg-accent text-bg font-semibold hover:brightness-105 shadow-glow-primary",
+    primary: "bg-accent text-on-accent font-semibold hover:brightness-105 shadow-glow-primary",
     secondary: "bg-secondary text-text hover:bg-surface-bright border border-white/5",
     ghost: "bg-transparent text-muted hover:text-text hover:bg-secondary",
     danger: "bg-danger-container text-[#ffdad6] hover:brightness-110",
@@ -120,7 +120,7 @@ export function ProgressList({ steps }: { steps: { label: string; status: "pendi
       {steps.map((s, i) => (
         <div key={i} className="flex items-center gap-3 text-sm">
           <span className={`w-4 h-4 rounded-full flex items-center justify-center ${
-            s.status === "done" ? "bg-success text-bg" : s.status === "active" ? "bg-accent text-bg animate-pulse-soft"
+            s.status === "done" ? "bg-success text-bg" : s.status === "active" ? "bg-accent text-on-accent animate-pulse-soft"
             : s.status === "error" ? "bg-danger-container text-[#ffdad6]" : "bg-secondary text-muted"
           }`}>
             {s.status === "done" ? <CheckIcon className="w-2.5 h-2.5" /> : s.status === "error" ? <XIcon className="w-2.5 h-2.5" /> : <span className="text-[10px]">{i + 1}</span>}

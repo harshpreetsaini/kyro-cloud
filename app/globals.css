@@ -7,22 +7,51 @@
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
   --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
 
-  /* Stellar Velocity palette (DESIGN.md) */
-  --color-bg: #0f102c;
-  --color-bg-deep: #090b27;
-  --color-surface: #171935;
-  --color-surface-bright: #353755;
-  --color-secondary: #262744;
-  --color-accent: #94ccff;
+  /* ── Stellar Velocity palette — verbatim from DESIGN.md ── */
+  --md-background: #0f102c;
+  --md-surface-dim: #0f102c;
+  --md-surface-bright: #353755;
+  --md-container-lowest: #090b27;
+  --md-container-low: #171935;
+  --md-container: #1b1d39;
+  --md-container-high: #262744;
+  --md-container-highest: #303250;
+  --md-on-surface: #e0e0ff;
+  --md-on-surface-variant: #c0c7d1;
+  --md-outline: #8a919a;
+  --md-outline-variant: #40474f;
+  --md-primary: #94ccff;
+  --md-on-primary: #003352;
+  --md-primary-container: #62aae5;
+  --md-on-primary-container: #003d60;
+  --md-secondary: #ffb870;
+  --md-on-secondary: #4a2800;
+  --md-secondary-container: #d17d0a;
+  --md-on-secondary-container: #402300;
+  --md-tertiary: #b6c4ff;
+  --md-on-tertiary: #1b2c65;
+  --md-error: #ffb4ab;
+  --md-on-error: #690005;
+  --md-error-container: #93000a;
+  --md-on-error-container: #ffdad6;
+
+  /* App semantic tokens → mapped onto DESIGN.md values */
+  --color-bg: var(--md-background);
+  --color-bg-deep: var(--md-container-lowest);
+  --color-surface: var(--md-container-low);
+  --color-surface-bright: var(--md-surface-bright);
+  --color-secondary: var(--md-container-high);
+  --color-accent: var(--md-primary);
   --color-accent-soft: rgba(148, 204, 255, 0.14);
-  --color-primary-container: #62aae5;
-  --color-tertiary: #b6c4ff;
-  --color-text: #e0e0ff;
-  --color-muted: #8a919a;
-  --color-danger: #ffb4ab;
-  --color-danger-container: #93000a;
-  --color-success: #77d9a8;
-  --color-warning: #ffb870;
+  --color-on-accent: var(--md-on-primary);
+  --color-primary-container: var(--md-primary-container);
+  --color-tertiary: var(--md-tertiary);
+  --color-text: var(--md-on-surface);
+  --color-muted: var(--md-outline);
+  --color-danger: var(--md-error);
+  --color-danger-container: var(--md-error-container);
+  --color-success: #77d9a8; /* no green in DESIGN.md — harmonized */
+  --color-warning: var(--md-secondary); /* DESIGN.md Secondary Orange */
 }
 
 * { box-sizing: border-box; }
@@ -46,9 +75,10 @@ a { color: inherit; text-decoration: none; }
 
 .mono { font-family: var(--font-mono), ui-monospace, monospace; }
 
-/* Claymorphism surfaces — soft-inflated depth (DESIGN.md elevation, 24px radii) */
+/* Claymorphism surfaces — soft-inflated depth (DESIGN.md elevation, 24px radii).
+   Gradient stops use only DESIGN.md container values. */
 .clay {
-  background: linear-gradient(145deg, #1e2040, #131531);
+  background: linear-gradient(145deg, var(--md-container-high), var(--md-container-low));
   border-radius: 24px;
   box-shadow:
     inset 2px 2px 6px rgba(255, 255, 255, 0.06),
@@ -57,7 +87,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .clay-sm {
-  background: linear-gradient(145deg, #1b1d39, #141631);
+  background: linear-gradient(145deg, var(--md-container-high), var(--md-container));
   border-radius: 16px;
   box-shadow:
     inset 1px 1px 3px rgba(255, 255, 255, 0.05),
@@ -79,14 +109,14 @@ a { color: inherit; text-decoration: none; }
 }
 
 .clay-inset {
-  background: rgba(9, 11, 39, 0.55);
+  background: rgba(9, 11, 39, 0.55); /* container-lowest @ 55% */
   box-shadow:
     inset 2px 2px 5px rgba(0, 0, 0, 0.5),
     inset -1px -1px 3px rgba(255, 255, 255, 0.04);
 }
 
 .panel {
-  background: linear-gradient(145deg, #1b1d39, #131531);
+  background: linear-gradient(145deg, var(--md-container), var(--md-container-low));
   border: 1px solid rgba(255, 255, 255, 0.04);
   border-radius: 20px;
   box-shadow:

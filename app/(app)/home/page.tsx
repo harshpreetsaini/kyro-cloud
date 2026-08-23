@@ -148,15 +148,15 @@ export default function HomePage() {
                       </span>
                     ))}
                   {fg.rating && (
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 font-medium flex items-center gap-1 w-fit">
-                      <StarIcon className="w-2.5 h-2.5 fill-yellow-400" /> {Number(fg.rating).toFixed(1)}
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning font-medium flex items-center gap-1 w-fit">
+                      <StarIcon className="w-2.5 h-2.5 fill-warning" /> {Number(fg.rating).toFixed(1)}
                     </span>
                   )}
                   {fg.isFree && (
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-medium">FREE</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-success/15 text-success font-medium">FREE</span>
                   )}
                   {fg.linuxCompatible && (
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-medium">LINUX</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-tertiary/15 text-tertiary font-medium">LINUX</span>
                   )}
                 </div>
                 <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">{fg.name}</h1>

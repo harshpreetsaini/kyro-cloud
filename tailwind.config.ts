@@ -13,6 +13,7 @@ const config: Config = {
         surface: "var(--color-surface)",
         secondary: "var(--color-secondary)",
         accent: "var(--color-accent)",
+        "on-accent": "var(--color-on-accent)",
         "accent-soft": "var(--color-accent-soft)",
         tertiary: "var(--color-tertiary)",
         text: "var(--color-text)",
@@ -37,7 +38,7 @@ const config: Config = {
         "clay-sm": "inset 1px 1px 3px rgba(255,255,255,0.05), inset -2px -2px 5px rgba(0,0,0,0.4), 0 8px 18px -8px rgba(0,0,0,0.55)",
         "clay-inset": "inset 2px 2px 5px rgba(0,0,0,0.5), inset -1px -1px 3px rgba(255,255,255,0.04)",
         "glow-primary": "0 0 18px rgba(148,204,255,0.30)",
-        "glow-secondary": "0 0 18px rgba(255,184,112,0.30)",
+        "glow-secondary": "0 0 18px rgba(255,184,112,0.30)", /* DESIGN.md Secondary Orange glow */
       },
       keyframes: {
         "fade-in": {
