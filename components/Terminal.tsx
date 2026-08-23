@@ -64,14 +64,21 @@ export function Terminal() {
             }
           });
 
-          const onResize = () => fitAddon.fit();
+          const onResize = () => {
+            try { fitAddon.fit(); } catch {}
+          };
           window.addEventListener("resize", onResize);
+          (term as any)._onResize = onResize;
         });
       });
     });
 
     return () => {
       cancelled = true;
+      try {
+        const t = termRef.current as any;
+        if (t?._onResize) window.removeEventListener("resize", t._onResize);
+      } catch {}
       try { wsRef.current?.close(); } catch {}
       try { termRef.current?.dispose(); } catch {}
     };

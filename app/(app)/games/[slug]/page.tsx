@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
@@ -9,6 +9,7 @@ import { authHeader } from "@/lib/auth/client";
 import { Button, Skeleton, Badge } from "@/components/ui";
 import {
   StarIcon, CheckIcon, HeartIcon, PlayIcon, DownloadIcon, ShareIcon,
+  AppWindowIcon, TerminalIcon, GamesIcon, ChevronLeftIcon, ChevronRightIcon, XIcon,
 } from "@/components/icons";
 import { runtimeAction, runtimeRefreshStream, runtimeStore } from "@/lib/runtime/store";
 import { isFavorite, toggleFavorite as toggleFavoriteStore, loadFavorites } from "@/lib/favorites";
@@ -36,6 +37,9 @@ export default function GameDetailsPage() {
   const [realScreenshots, setRealScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
   const [providerLogin, setProviderLogin] = useState<Record<string, { loggedIn: boolean; username?: string }>>({});
+  const [lightbox, setLightbox] = useState<number | null>(null);
+  const galleryRef = useRef<HTMLDivElement>(null);
+
 
   useEffect(() => {
     const slug = params.slug as string;
@@ -250,6 +254,24 @@ export default function GameDetailsPage() {
   ];
 
   const screenshotsToShow = realScreenshots.length > 0 ? realScreenshots : (game.screenshots?.map(s => s.url) || []);
+  // Lightbox keyboard navigation.
+  useEffect(() => {
+    if (lightbox === null) return;
+    const shots = screenshotsToShow;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "ArrowRight") setLightbox((i) => (i === null ? i : (i + 1) % shots.length));
+      if (e.key === "ArrowLeft") setLightbox((i) => (i === null ? i : (i - 1 + shots.length) % shots.length));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox, screenshotsToShow]);
+
+  const scrollGallery = (dir: 1 | -1) => {
+    const el = galleryRef.current;
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+  };
+
 
   return (
     <div className="flex flex-col gap-6">
@@ -258,11 +280,11 @@ export default function GameDetailsPage() {
         {game.heroImage && !imgError ? (
           <img src={game.heroImage} alt="" className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
         ) : game.coverImage && !imgError ? (
-          <img src={game.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40" onError={() => setImgError(true)} />
+          <img src={game.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-60" onError={() => setImgError(true)} />
         ) : (
           <div className="absolute inset-0 bg-gradient-to-br from-accent/30 to-secondary" />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent [mask-image:linear-gradient(to_top,black_0%,black_45%,transparent_75%)]" />
         <div className="absolute inset-0 flex flex-col justify-end p-8">
           <div className="max-w-3xl">
             <div className="flex items-center gap-2 mb-3">
@@ -392,6 +414,17 @@ export default function GameDetailsPage() {
                 <Badge tone="neutral">{primaryProvider.name}</Badge>
               </div>
             )}
+            {game && (
+              <div className="flex items-center gap-2 flex-wrap text-sm">
+                <span className="text-muted">Supported Platforms</span>
+                {platformChips(game).map((c) => (
+                  <span key={c.label} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-secondary/70 border border-white/5 text-xs">
+                    <c.icon className="w-3.5 h-3.5 text-accent" />
+                    {c.label}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex gap-3">
               {installed || installState === "ready" ? (
                 <Button size="lg" onClick={handlePlay} disabled={isRunning || isLaunching} className="inline-flex items-center gap-2">
@@ -484,24 +517,98 @@ export default function GameDetailsPage() {
             </div>
           )}
 
-          {/* Screenshots */}
+          {/* Screenshots — horizontal scroll gallery with lightbox */}
           {(loadingScreenshots || screenshotsToShow.length > 0) && (
             <div className="mb-6 animate-fadeInUp" style={{ animationDelay: "0.2s" }}>
               <h2 className="text-lg font-semibold mb-3">Screenshots</h2>
               {loadingScreenshots ? (
-                <div className="grid grid-cols-2 gap-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="aspect-video rounded-lg bg-secondary animate-pulse" />
+                <div className="flex gap-3 overflow-hidden">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="shrink-0 w-[320px] sm:w-[420px] aspect-video rounded-2xl bg-secondary animate-pulse" />
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3 stagger-children">
-                  {screenshotsToShow.slice(0, 4).map((url, i) => (
-                    <div key={i} className="aspect-video rounded-lg bg-secondary overflow-hidden hover:scale-[1.02] transition-transform duration-300 cursor-pointer">
-                      <img src={url} alt={`${game.name} screenshot ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                <>
+                  <div className="relative group/gallery">
+                    <div
+                      ref={galleryRef}
+                      className="flex gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-2 [-ms-overflow-style:none] [scrollbar-width:thin]"
+                    >
+                      {screenshotsToShow.map((url, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setLightbox(i)}
+                          aria-label={`Open screenshot ${i + 1}`}
+                          className="snap-center shrink-0 w-[300px] sm:w-[440px] aspect-video rounded-2xl overflow-hidden clay-sm hover:shadow-clay hover:scale-[1.015] transition-all duration-200 cursor-zoom-in"
+                        >
+                          <img src={url} alt={`${game?.name || "Game"} screenshot ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                    {screenshotsToShow.length > 1 && (
+                      <>
+                        <button
+                          onClick={() => scrollGallery(-1)}
+                          aria-label="Previous screenshots"
+                          className="hidden md:flex absolute left-1 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full clay-btn bg-bg/80 items-center justify-center opacity-0 group-hover/gallery:opacity-100 transition-opacity"
+                        >
+                          <ChevronLeftIcon className="w-5 h-5" />
+                        </button>
+                        <button
+                          onClick={() => scrollGallery(1)}
+                          aria-label="Next screenshots"
+                          className="hidden md:flex absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full clay-btn bg-bg/80 items-center justify-center opacity-0 group-hover/gallery:opacity-100 transition-opacity"
+                        >
+                          <ChevronRightIcon className="w-5 h-5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {lightbox !== null && screenshotsToShow[lightbox] && (
+                    <div
+                      className="fixed inset-0 z-[90] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+                      role="dialog"
+                      aria-modal="true"
+                      onClick={() => setLightbox(null)}
+                    >
+                      <img
+                        src={screenshotsToShow[lightbox]}
+                        alt={`Screenshot ${lightbox + 1}`}
+                        className="max-w-full max-h-[85vh] object-contain rounded-xl"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      {screenshotsToShow.length > 1 && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setLightbox((i) => (i === null ? i : (i - 1 + screenshotsToShow.length) % screenshotsToShow.length)); }}
+                            aria-label="Previous screenshot"
+                            className="absolute left-3 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full clay-btn bg-bg/80 flex items-center justify-center"
+                          >
+                            <ChevronLeftIcon className="w-6 h-6" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setLightbox((i) => (i === null ? i : (i + 1) % screenshotsToShow.length)); }}
+                            aria-label="Next screenshot"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full clay-btn bg-bg/80 flex items-center justify-center"
+                          >
+                            <ChevronRightIcon className="w-6 h-6" />
+                          </button>
+                          <span className="absolute bottom-4 text-xs text-white/70 mono">
+                            {lightbox + 1} / {screenshotsToShow.length}
+                          </span>
+                        </>
+                      )}
+                      <button
+                        onClick={() => setLightbox(null)}
+                        aria-label="Close"
+                        className="absolute top-4 right-4 w-10 h-10 rounded-full clay-btn bg-bg/80 flex items-center justify-center"
+                      >
+                        <XIcon className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -609,4 +716,22 @@ function formatTime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+// Supported-platform chips derived strictly from catalog metadata:
+// platforms[] / linuxCompatible. Windows is implied by the PC platform;
+// titles without a native Linux build are marked as Proton on the cloud.
+function platformChips(game: GameEntry): { label: string; icon: React.ComponentType<{ className?: string }> }[] {
+  const plats = new Set<string>((game.platforms || []).map((p) => String(p)));
+  const hasLinux = plats.has("Linux") || game.linuxCompatible === true;
+  const chips: { label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { label: "Windows", icon: AppWindowIcon },
+  ];
+  if (hasLinux) {
+    chips.push({ label: "Linux", icon: TerminalIcon });
+    if (plats.has("Steam Deck")) chips.push({ label: "Steam Deck", icon: GamesIcon });
+  } else {
+    chips.push({ label: "Windows · via Proton", icon: GamesIcon });
+  }
+  return chips;
 }

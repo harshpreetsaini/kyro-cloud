@@ -64,6 +64,7 @@ export {
   ArrowUp as ArrowUpIcon,
   ArrowDown as ArrowDownIcon,
   Monitor as MonitorIcon,
+  AppWindow as AppWindowIcon,
 } from "lucide-react";
 
 import type { LucideProps } from "lucide-react";

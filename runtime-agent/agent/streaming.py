@@ -170,16 +170,125 @@ def start_stream(payload: dict) -> dict:
     return {"ok": True, "mode": "gstreamer", "resolution": payload.get("resolution", "1080p")}
 
 
-def launch_game(payload: dict) -> None:
-    exe = payload.get("executable")
-    if not exe:
-        return
+# ── Game launching (native Linux + Windows-via-Proton) ─────────────────
+def _largest_file(root: str, suffixes) -> str | None:
+    best, best_size = None, 0
+    for r, _dirs, files in os.walk(root):
+        for f in files:
+            if not f.lower().endswith(suffixes):
+                continue
+            p = os.path.join(r, f)
+            try:
+                sz = os.path.getsize(p)
+            except OSError:
+                continue
+            if sz > best_size:
+                best, best_size = p, sz
+    return best
+
+
+def _is_elf(path: str) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == b"\x7fELF"
+    except Exception:
+        return False
+
+
+def _resolve_game_target(payload: dict) -> dict:
+    """Resolve {exe, mode} for a launch request. Windows titles (.exe under a
+    directory marked .kyro_proton, or any .exe hit) run through umu-run
+    (Proton); native ELF binaries exec directly. Returns {} when unresolvable."""
+    game_id = str(payload.get("id") or "")
+    app_id = str(payload.get("appId") or payload.get("steamAppId") or "")
+    install_dir = payload.get("installDir") or (os.path.join("/home/gamer/games", game_id) if game_id else "")
+    exe = payload.get("executable") or ""
+
+    marker = os.path.join(install_dir, ".kyro_proton") if install_dir else ""
+
+    if exe and os.path.isfile(exe):
+        mode = "proton" if exe.lower().endswith(".exe") else "native"
+        return {"exe": exe, "mode": mode, "installDir": install_dir or None}
+
+    if install_dir and os.path.isdir(install_dir):
+        is_proton = os.path.exists(marker)
+        if is_proton:
+            win_exe = _largest_file(install_dir, (".exe",))
+            if win_exe:
+                return {"exe": win_exe, "mode": "proton", "installDir": install_dir}
+        # Native: prefer shell launchers, then the biggest ELF binary.
+        for cand in ("start.sh", "launcher.sh"):
+            p = os.path.join(install_dir, cand)
+            if os.path.isfile(p):
+                return {"exe": p, "mode": "sh", "installDir": install_dir}
+        elfs = []
+        for r, _d, files in os.walk(install_dir):
+            for f in files:
+                if f.lower().endswith((".so", ".pak", ".bin", ".dat", ".txt", ".json", ".xml", ".cfg")):
+                    continue
+                p = os.path.join(r, f)
+                try:
+                    if os.access(p, os.X_OK) and _is_elf(p):
+                        elfs.append((os.path.getsize(p), p))
+                except OSError:
+                    continue
+        if elfs:
+            elfs.sort(reverse=True)
+            return {"exe": elfs[0][1], "mode": "native", "installDir": install_dir}
+        # A Windows tree without the marker: treat biggest .exe as Proton.
+        win_exe = _largest_file(install_dir, (".exe",))
+        if win_exe:
+            return {"exe": win_exe, "mode": "proton", "installDir": install_dir}
+
+    # Catalog fallback gave us a bare appId (no local install yet).
+    if app_id.isdigit() or exe.isdigit():
+        raise FileNotFoundError(
+            f"No installed game found for '{payload.get('id')}' — install it first "
+            f"(no executable can be resolved from appId '{exe or app_id}')."
+        )
+    if exe:
+        raise FileNotFoundError(f"Executable '{exe}' does not exist on this machine.")
+    raise FileNotFoundError("Launch request had neither an executable nor an installed game.")
+
+
+def launch_game(payload: dict) -> dict:
+    """Start a game process. Returns {'proc': Popen, 'mode': ...} so the caller
+    can track/stop it. Windows titles run via umu-run (Proton) under the gamer
+    user with a per-game WINEPREFIX."""
+    tgt = _resolve_game_target(payload)
+    exe = tgt["exe"]
+    mode = tgt["mode"]
+    install_dir = tgt.get("installDir")
+
+    args = payload.get("arguments", "").split() if payload.get("arguments") else []
     env = dict(os.environ, DISPLAY=DISPLAY)
-    subprocess.Popen(
-        [exe] + (payload.get("arguments", "").split() if payload.get("arguments") else []),
-        cwd=payload.get("workingDir"),
-        env=env,
-    )
+
+    if mode == "proton":
+        app_id = str(payload.get("appId") or payload.get("steamAppId") or "0")
+        prefix = os.path.join(install_dir or "/home/gamer/games/proton-prefixes", "compat")
+        os.makedirs(prefix, exist_ok=True)
+        try:
+            subprocess.run(["chown", "-R", "gamer:gamer", prefix], check=False, timeout=30)
+        except Exception:
+            pass
+        umu = shutil.which("umu-run")
+        if not umu:
+            raise FileNotFoundError("umu-run not installed — re-run the bootstrap notebook (Proton support)")
+        cmd = ["runuser", "-u", "gamer", "--", "env",
+               f"DISPLAY={DISPLAY}",
+               f"STEAM_COMPAT_DATA_PATH={prefix}",
+               f"WINEPREFIX={prefix}",
+               f"GAMEID=umu-{app_id}",
+               "UMU_NO_RUNTIME=" ,
+               umu, exe] + args
+    else:
+        cmd = ["runuser", "-u", "gamer", "--", "env", f"DISPLAY={DISPLAY}", exe] + args
+
+    print(f"[stream] launching ({mode}): {exe}", flush=True)
+    proc = subprocess.Popen(cmd, cwd=install_dir or None, env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    return {"proc": proc, "mode": mode, "exe": exe}
 
 
 def start_vnc(payload=None) -> dict:

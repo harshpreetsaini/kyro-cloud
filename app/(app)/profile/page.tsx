@@ -73,8 +73,17 @@ export default function ProfilePage() {
 
   const favIds = useMemo(() => profile?.favorites || [], [profile]);
   const favGames = useMemo(() => games.filter((g) => favIds.includes(g.id)), [games, favIds]);
-  const installedIds = useMemo(() => Object.keys(installedGames || {}), [installedGames]);
-  const installedList = useMemo(() => games.filter((g) => installedIds.includes(g.id)), [games, installedIds]);
+  // Installed = live runtime map ∪ durable profile.installed_games (survives refresh).
+  const installedIds = useMemo(() => {
+    const persisted = (profile as any)?.installed_games || {};
+    return Array.from(new Set([...Object.keys(installedGames || {}), ...Object.keys(persisted)]));
+  }, [installedGames, profile]);
+  const installedList = useMemo(() => {
+    const byId = new Map(games.map((g) => [g.id, g]));
+    const list = installedIds.map((id) => byId.get(id)).filter(Boolean) as typeof games;
+    // Synced-only ids that aren't in the catalog still count toward the total.
+    return list;
+  }, [games, installedIds]);
   const connectedCount = useMemo(
     () => PROVIDERS.filter((p) => profile?.providers?.[p.id]?.username || profile?.providers?.[p.id]?.accountId).length,
     [profile]
@@ -83,6 +92,10 @@ export default function ProfilePage() {
   async function logout() {
     setLoggingOut(true);
     try {
+      // Clear every local cache tied to the previous identity.
+      try { localStorage.removeItem("luna_token"); } catch {}
+      try { localStorage.removeItem("kyro_steam_linked"); } catch {}
+      try { localStorage.removeItem("kyro_favorites_cache"); } catch {}
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {}
     setToken(null);

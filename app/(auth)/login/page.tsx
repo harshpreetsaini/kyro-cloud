@@ -18,22 +18,27 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError("");
-    let data: { data?: { token?: string } } = {};
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
     try {
-      data = await res.json();
-    } catch {}
-    if (res.ok && data.data?.token) {
-      setToken(data.data.token);
-      setSessionCookie(data.data.token);
-      await loadFavorites();
-      router.push("/home");
-    } else {
+      let data: { data?: { token?: string } } = {};
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      try {
+        data = await res.json();
+      } catch {}
+      if (res.ok && data.data?.token) {
+        setToken(data.data.token);
+        setSessionCookie(data.data.token);
+        await loadFavorites();
+        router.push("/home");
+        return;
+      }
       setError("Invalid credentials");
+    } catch {
+      setError("Network error — please try again");
+    } finally {
       setLoading(false);
     }
   }

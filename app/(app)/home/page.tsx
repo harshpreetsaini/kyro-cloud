@@ -133,11 +133,11 @@ export default function HomePage() {
             {fg.heroImage ? (
               <img src={fg.heroImage} alt="" className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
             ) : fg.coverImage ? (
-              <img src={fg.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40" />
+              <img src={fg.coverImage} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-60" />
             ) : (
               <div className="absolute inset-0 bg-gradient-to-br from-accent/30 to-secondary" />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent [mask-image:linear-gradient(to_top,black_0%,black_45%,transparent_75%)]" />
             <div className="absolute inset-0 flex flex-col justify-end p-8">
               <div className="max-w-2xl">
                 <div className="flex items-center gap-2 mb-3">
@@ -226,16 +226,16 @@ export default function HomePage() {
         )}
       </Reveal>
 
-      {renderGameRow(popular.slice(0, 12), "Popular Now", "/games")}
+      {popular.length > 0 && renderGameRow(popular.slice(0, 12), "Popular Now", "/games")}
 
       {installed.length > 0 && renderGameRow(installed, "Your Library", "/library")}
 
-      {renderGameRow(freeGames, "Free to Play", "/games")}
+      {freeGames.length > 0 && renderGameRow(freeGames, "Free to Play", "/games")}
 
       {linuxFree.length > 0 &&
         renderGameRow(linuxFree, "Free Steam Games for Linux", "/games?free=1&linux=1", "Browse Linux")}
 
-      {renderGameRow(steamGames, "Steam Collection", "/games")}
+      {steamGames.length > 0 && renderGameRow(steamGames, "Steam Collection", "/games")}
 
       {epicGames.length > 0 && renderGameRow(epicGames, "Epic Games", "/providers", "Connect Epic")}
 

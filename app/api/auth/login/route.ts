@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { initDb, getOrCreateOwnerUser } from "@/lib/db.mjs";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/jwt";
 
@@ -13,6 +14,13 @@ async function ensureInit() {
   }
 }
 
+function safeEqStr(a: string, b: string): boolean {
+  const ab = Buffer.from(String(a ?? ""));
+  const bb = Buffer.from(String(b ?? ""));
+  if (ab.length === 0 || ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 export async function POST(req: NextRequest) {
   await ensureInit();
   let body: { username?: string; password?: string } = {};
@@ -20,8 +28,9 @@ export async function POST(req: NextRequest) {
     body = await req.json();
   } catch {}
   const user = process.env.LUNA_USER || "owner";
-  const pass = process.env.LUNA_PASSWORD || "change-me";
-  if (body.username !== user || body.password !== pass) {
+  // Fail closed: without LUNA_PASSWORD set, password login is disabled.
+  const pass = process.env.LUNA_PASSWORD || "";
+  if (!pass || !safeEqStr(body.username || "", user) || !safeEqStr(body.password || "", pass)) {
     return NextResponse.json({ ok: false, error: "Invalid credentials" }, { status: 401 });
   }
   const owner = await getOrCreateOwnerUser();

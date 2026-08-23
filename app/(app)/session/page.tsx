@@ -44,7 +44,7 @@ function GameControls({ onExit }: { onExit: () => void }) {
         </div>
       ) : (
         <div className="flex gap-2">
-          <Link href="/home">
+          <Link href="/library">
             <Button variant="ghost" className="!py-1.5 !px-3 text-xs">Library</Button>
           </Link>
           <Button variant="danger" className="!py-1.5 !px-3 text-xs" onClick={() => setShowConfirm(true)}>Exit Game</Button>

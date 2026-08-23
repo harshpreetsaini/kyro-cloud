@@ -29,13 +29,14 @@ export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state") || "";
   const cookieState = req.cookies.get("google_state")?.value;
-  const errUrl = `${origin}/callback?error=` + encodeURIComponent;
 
   if (!code) {
     return NextResponse.redirect(`${origin}/callback?error=${encodeURIComponent("Missing authorization code from Google.")}`);
   }
-  if (cookieState && state && cookieState !== state) {
-    return NextResponse.redirect(`${origin}/callback?error=${encodeURIComponent("Invalid state parameter (possible CSRF).")}`);
+  // CSRF state is MANDATORY — an attacker-supplied URL cannot opt out by
+  // omitting the parameter.
+  if (!cookieState || !state || cookieState !== state) {
+    return NextResponse.redirect(`${origin}/callback?error=${encodeURIComponent("Invalid or missing state parameter (possible CSRF).")}`);
   }
   try {
     const tokenRes = await fetch(GOOGLE_TOKEN_URL, {

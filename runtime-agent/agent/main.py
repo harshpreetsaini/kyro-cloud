@@ -7,6 +7,7 @@ import signal
 import re
 import hashlib
 import shutil
+import subprocess
 
 import websocket  # websocket-client
 
@@ -31,9 +32,47 @@ _ws_gen = 0
 _stats_stop = None
 _terminal_procs = {}
 _agent_pids = []
-_install_proc = None  # Currently running install subprocess (for cancellation)
-_install_cancel = threading.Event()
-_install_dirs = {}  # gameId -> install_dir (for per-game cleanup on cancel)
+# Per-install state keyed by gameId — concurrent installs each get their own
+# process handle, cancel event and directory registration.
+_install_lock = threading.Lock()
+_installs = {}  # gameId -> {"proc": Popen, "cancel": Event, "dir": str, "proton": bool}
+_game_procs = {}  # gameId -> launched game Popen (so Stop Game actually works)
+
+
+def _register_game_proc(game_id, proc, ws):
+    """Watch a launched game process; report exit so the UI clears its state."""
+
+    def _watch():
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        with _install_lock:
+            _game_procs.pop(game_id, None)
+        try:
+            send(ws, "game.stopped", {"gameId": game_id})
+        except Exception:
+            pass
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
+def _launch_game_async(ws, p):
+    try:
+        result = streaming.launch_game(p)
+        proc = result.get("proc")
+        gid = p.get("id") or p.get("appId") or ""
+        if proc is not None and gid:
+            with _install_lock:
+                _game_procs[gid] = proc
+            _register_game_proc(gid, proc, ws)
+        payload = {k: v for k, v in (p or {}).items() if k not in ("steamPass", "password")}
+        if isinstance(result, dict):
+            payload["mode"] = result.get("mode")
+        send(ws, "game.started", payload)
+    except Exception as ex:
+        print(f"[agent] launch failed: {ex}", flush=True)
+        send(ws, "game.start_error", {"id": p.get("id"), "error": str(ex)})
 
 
 def _games_base():
@@ -73,17 +112,15 @@ def _legendary_cmd():
 
 def _cleanup_install(game_id):
     """Remove the partially downloaded files for a game after cancel or
-    failure. Only runs for directories registered as the active install of
+    failure. Only runs for directories registered as an active install of
     that game, so installed (completed) games are never touched. Best-effort
     and idempotent."""
-    global _install_dirs
-    d = _install_dirs.get(game_id)
+    with _install_lock:
+        d = _installs.get(game_id, {}).get("dir")
+        if d:
+            _installs.pop(game_id, None)
     if not d:
         return  # not an active install — don't touch completed games
-    try:
-        del _install_dirs[game_id]
-    except Exception:
-        pass
     if d.startswith(_games_base()) and os.path.abspath(d) != os.path.abspath(_games_base()):
         try:
             shutil.rmtree(d, ignore_errors=True)
@@ -471,16 +508,31 @@ def on_message(ws, raw):
             result = {"ok": False, "error": f"get_quality crashed: {ex}"}
         send(ws, "quality_info", result)
     elif t == "launch_game":
-        streaming.launch_game(p)
-        send(ws, "game.started", p)
+        # Resolve+launch can take a moment (umu first-run); keep the WS loop free.
+        threading.Thread(target=_launch_game_async, args=(ws, p), daemon=True).start()
     elif t == "detect_apps":
         send(ws, "app.list", apps.detect_apps())
     elif t == "launch_app":
         result = apps.launch_app(p.get("id"), agent_send)
         send(ws, "app.launch_result", {"id": p.get("id"), **result})
     elif t == "stop_app":
-        result = apps.stop_app(p.get("id"), agent_send)
-        send(ws, "app.stop_result", {"id": p.get("id"), **result})
+        gid = p.get("id")
+        gp = None
+        with _install_lock:
+            gp = _game_procs.pop(gid, None) if gid else None
+        if gp is not None:
+            # A launched GAME (not a registry app) — kill its process group.
+            try:
+                os.killpg(os.getpgid(gp.pid), signal.SIGTERM)
+            except Exception:
+                try:
+                    gp.terminate()
+                except Exception:
+                    pass
+            send(ws, "app.stop_result", {"id": gid, "ok": True})
+        else:
+            result = apps.stop_app(p.get("id"), agent_send)
+            send(ws, "app.stop_result", {"id": p.get("id"), **result})
     elif t == "start_webrtc":
         _session_active = True
         try:
@@ -516,6 +568,10 @@ def on_message(ws, raw):
         _provider_sync(ws, p)
     elif t == "provider.logout":
         _provider_logout(ws, p)
+    elif t == "provider.epic.auth.start":
+        _epic_auth_start(ws, p)
+    elif t == "provider.epic.auth.complete":
+        _epic_auth_complete(ws, p)
     elif t == "provider.linked":
         _provider_linked(ws, p)
     elif t == "game.install":
@@ -530,6 +586,18 @@ def on_message(ws, raw):
         _session_active = False
         streaming.stop_all()
         apps.stop_all()
+        # Kill any launched games so nothing keeps rendering to the display.
+        with _install_lock:
+            procs = list(_game_procs.values())
+            _game_procs.clear()
+        for gp in procs:
+            try:
+                os.killpg(os.getpgid(gp.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    gp.kill()
+                except Exception:
+                    pass
         for ch_id, rec in list(_terminal_procs.items()):
             try:
                 fd = rec.get("fd") if isinstance(rec, dict) else None
@@ -967,7 +1035,32 @@ def _provider_sync(ws, p):
 
 
 def _provider_logout(ws, p):
-    send(ws, "provider.logout.result", {"provider": p.get("provider", "steam"), "ok": True})
+    """Wipe this provider's local credentials so installs no longer run under
+    the disconnected account."""
+    provider = p.get("provider", "")
+    removed = []
+    try:
+        f = os.path.join(_AUTH_DIR, f"{provider}_auth.txt")
+        if os.path.exists(f):
+            os.remove(f)
+            removed.append(f)
+    except Exception:
+        pass
+    try:
+        if provider == "epic":
+            f = os.path.expanduser("~/.config/legendary/user.json")
+            if os.path.exists(f):
+                os.remove(f)
+                removed.append(f)
+        elif provider == "gog":
+            f = os.path.expanduser("~/.config/lgogdownloader/gog_tokens.json")
+            if os.path.exists(f):
+                os.remove(f)
+                removed.append(f)
+    except Exception:
+        pass
+    print(f"[agent] provider {provider} logged out; cleared: {removed or 'nothing stored'}", flush=True)
+    send(ws, "provider.logout.result", {"provider": provider, "ok": True})
 
 
 def _provider_linked(ws, p):
@@ -1024,8 +1117,36 @@ def _provider_linked(ws, p):
 
 
 # ── Game install ───────────────────────────────────────────────────────
+INSTALL_TIMEOUT_SECONDS = int(os.environ.get("INSTALL_TIMEOUT", "3600"))
+
+def _kill_proc_group(proc):
+    """SIGKILL a subprocess and its whole process group (the real downloader
+    is a child of the `script` wrapper and needs the group, not the wrapper)."""
+    if proc is None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _redact_cmd(cmd):
+    """Log-safe copy of the command line: the password position (the token
+    right after the username following +login) is masked."""
+    out = [str(x) for x in cmd]
+    try:
+        i = out.index("+login")
+        if i + 2 < len(out):
+            out[i + 2] = "***"
+    except ValueError:
+        pass
+    return " ".join(out)
+
+
 def _game_install(ws, p):
-    import subprocess, re
     game_id = p.get("id", "")
     install_method = p.get("installMethod", "steamcmd")
     app_id = p.get("appId") or p.get("steamAppId", "")
@@ -1040,13 +1161,21 @@ def _game_install(ws, p):
         linked = _fetch_linked_from_backend("steam")
         if linked.get("username"):
             auth_code = f"{linked['username']}:{linked.get('password', '')}"
+
     def _send_progress(state, percent, downloaded=0, total=0, speed=0, eta=0):
         send(ws, "game.install.progress", {"gameId": game_id, "state": state, "percent": round(percent, 1), "downloadedBytes": downloaded, "totalBytes": total, "speedBytesPerSec": speed, "etaSeconds": eta})
+
     def _do_install():
-        global _install_proc, _install_cancel, _install_dirs
+        ctx = {"proc": None, "cancel": threading.Event(), "dir": install_dir, "proton": False}
+        logf = None
         try:
-            _install_cancel.clear()
-            _install_dirs[game_id] = install_dir
+            with _install_lock:
+                _installs[game_id] = ctx
+            cancel_event = ctx["cancel"]
+
+            def _cancelled():
+                return cancel_event.is_set()
+
             os.makedirs(install_dir, exist_ok=True)
             # Always-open install log so we can diagnose even if app_id is missing
             log_path = os.path.join("/tmp", f"install-{game_id}.log")
@@ -1054,25 +1183,26 @@ def _game_install(ws, p):
                 logf = open(log_path, "w")
             except Exception:
                 logf = None
+
             def _log(line):
                 try:
                     if logf:
                         logf.write(line); logf.flush()
                 except Exception:
                     pass
+
             _log(f"install start: method={install_method} app_id={app_id!r} provider={provider_type} install_dir={install_dir}\n")
             print(f"[agent] install start: game={game_id} method={install_method} app={app_id} dir={install_dir} log={log_path}", flush=True)
             _send_progress("checking", 0)
 
-            # Check if the installer is available
             if install_method == "steamcmd":
                 import shutil
                 if not shutil.which("steamcmd"):
                     send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "steamcmd not installed — run: apt install steamcmd"})
                     send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "steamcmd not installed"})
-                    if logf: logf.close()
                     return
 
+            ok = False
             if install_method == "steamcmd" and app_id:
                 _send_progress("downloading", 0)
                 # Prefer credentials sent with the install request; fall back to
@@ -1094,164 +1224,196 @@ def _game_install(ws, p):
                     # error instead of attempting an anonymous install.
                     send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam account not linked — link your Steam account in Providers to install this game (a real account is required even for free-to-play titles)."})
                     send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account not linked"})
-                    if logf: logf.close()
                     return
-                login_user = steam_user
-                login_args = ["+login", login_user]
+                login_args = ["+login", steam_user]
                 if steam_pass:
                     login_args.append(steam_pass)
-                print(f"[agent] steamcmd install: app={app_id} user={login_user} dir={install_dir}", flush=True)
-                # force_install_dir MUST come before +login, otherwise steamcmd
-                # errors with "Please use force_install_dir before logon!"
-                cmd = ["steamcmd", "+force_install_dir", install_dir] + login_args + \
-                      ["+app_update", str(app_id), "validate", "+quit"]
-                _log(f"cmd: {' '.join(cmd)}\n")
-                cmd_buf = ["steamcmd", "+force_install_dir", install_dir] + login_args + ["+app_update", str(app_id), "validate", "+quit"]
-                cmd_buf = _wrap_steamcmd(cmd_buf)
-                proc = subprocess.Popen(cmd_buf, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                _install_proc = proc
-                _agent_pids.append(proc.pid)
-                percent = total_bytes = speed_bps = 0
-                authed = False
-                guard_attempts = 0
-                MAX_GUARD = 3
-                requesting = False
-                for line in proc.stdout:
+                print(f"[agent] steamcmd install: app={app_id} user={steam_user} dir={install_dir}", flush=True)
+
+                def _run_steamcmd_attempt(force_windows: bool):
+                    """One full steamcmd run. Returns (ok, platform_error)."""
+                    percent = total_bytes = speed_bps = 0
+                    authed = False
+                    guard_attempts = 0
+                    MAX_GUARD = 3
+                    requesting = False
+                    platform_hit = False
+                    started = time.time()
+                    cmd = ["steamcmd", "+force_install_dir", install_dir]
+                    if force_windows:
+                        cmd += ["+@sSteamCmdForcePlatformType", "windows"]
+                    cmd += login_args + ["+app_update", str(app_id), "validate", "+quit"]
+                    _log(("cmd(windows): " if force_windows else "cmd(linux): ") + _redact_cmd(cmd) + "\n")
+                    run_cmd = _wrap_steamcmd(cmd)
+                    proc = subprocess.Popen(run_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+                    ctx["proc"] = proc
+                    _agent_pids.append(proc.pid)
+                    for line in proc.stdout:
+                        try:
+                            logf.write(line); logf.flush()
+                        except Exception:
+                            pass
+                        if _cancelled():
+                            _kill_proc_group(proc)
+                            _cleanup_install(game_id)
+                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
+                            return False, False
+                        if time.time() - started > INSTALL_TIMEOUT_SECONDS:
+                            _log(f"timeout after {INSTALL_TIMEOUT_SECONDS}s\n")
+                            _kill_proc_group(proc)
+                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": f"Install timed out after {INSTALL_TIMEOUT_SECONDS // 60} minutes."})
+                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Install timed out"})
+                            return False, False
+                        lo = line.lower().strip()
+                        # License/ownership failure: the linked account does not own
+                        # this app. Even free-to-play Steam titles must be in the
+                        # account's library before steamcmd can download them.
+                        if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
+                            _log("steamcmd license error: " + line)
+                            _kill_proc_group(proc)
+                            _cleanup_install(game_id)
+                            gname = p.get("name") or f"app {app_id}"
+                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Your Steam account '" + str(steam_user) + "' does not own " + str(gname) + ". Even free-to-play Steam games must be added to your Steam library (free) before they can be installed. Open the Steam store, add it to your library, then retry."})
+                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account does not own this game"})
+                            return False, False
+                        # Platform errors trigger the Windows/Proton retry instead of
+                        # failing outright — Windows-only titles are fully supported.
+                        if "invalid platform" in lo or ("platform" in lo and "not available" in lo) or "no linux depot" in lo or ("error!" in lo and "platform" in lo):
+                            _log("steamcmd platform error (will retry windows): " + line)
+                            _kill_proc_group(proc)
+                            platform_hit = True
+                            break
+                        # Steam Guard (2FA) code requested — ask the user and feed it
+                        # back. Only before we're authenticated; once the download
+                        # starts we ignore any trailing guard-related log lines.
+                        if not authed and _is_steam_guard_prompt(lo):
+                            # The guard prompt spans several log lines; only request a
+                            # code once per prompt cycle (not once per matching line).
+                            if requesting:
+                                continue
+                            requesting = True
+                            guard_attempts += 1
+                            if guard_attempts > MAX_GUARD:
+                                send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
+                                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
+                                _kill_proc_group(proc)
+                                _cleanup_install(game_id)
+                                return False, False
+                            guard_code = _request_steam_guard(f"install-{game_id}")
+                            if guard_code and proc.stdin:
+                                try:
+                                    proc.stdin.write(guard_code + "\n")
+                                    proc.stdin.flush()
+                                except Exception:
+                                    pass
+                            continue
+                        # A fresh login attempt or a rejection lets the next guard
+                        # prompt request a code again (one attempt per cycle).
+                        if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
+                            requesting = False
+                        dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
+                        if dl_match:
+                            downloaded = int(dl_match.group(1).replace(',', ''))
+                            percent = float(dl_match.group(2))
+                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                            continue
+                        # steamcmd self-update progress: "[  7%] Downloading update (...)"
+                        boot_match = re.search(r'\[\s*(\d+)%\]\s*downloading update', lo)
+                        if boot_match:
+                            percent = float(boot_match.group(1))
+                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                            continue
+                        # steamcmd game-download line: "Update state (0x61) downloading,
+                        # progress: 2.26 (2059360684 / 91106400180)" — percent then bytes.
+                        prog_match = re.search(r'progress:\s*([\d.]+)\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                        if prog_match:
+                            percent = float(prog_match.group(1))
+                            downloaded = int(prog_match.group(2).replace(',', ''))
+                            total_bytes = int(prog_match.group(3).replace(',', ''))
+                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                            continue
+                        prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                        if prog_match:
+                            percent = float(prog_match.group(1))
+                            downloaded = int(prog_match.group(2).replace(',', ''))
+                            total_bytes = int(prog_match.group(3).replace(',', ''))
+                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                            continue
+                        prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
+                        if prog_match:
+                            percent = float(prog_match.group(1))
+                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                            continue
+                        spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
+                        if spd_match:
+                            val = float(spd_match.group(1))
+                            unit = spd_match.group(2)
+                            speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
+                            continue
+                        size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
+                        if size_match:
+                            total_bytes = int(size_match.group(1).replace(',', ''))
+                            continue
+                        if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
+                            authed = True
+                            requesting = False
+                            percent = min(percent + 2, 95)
+                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                     try:
-                        logf.write(line); logf.flush()
+                        proc.wait(timeout=60)
+                    except Exception:
+                        _kill_proc_group(proc)
+                    # steamcmd sometimes prints "Error! App 'X' state is 0x602 after
+                    # update job" yet still writes a complete appmanifest. Treat the
+                    # install as successful if the manifest exists or success markers
+                    # are present, rather than trusting the (often non-zero) exit
+                    # code. Manifests live under steamapps/ inside the install dir.
+                    manifest_ok = (
+                        os.path.exists(os.path.join(install_dir, "steamapps", f"appmanifest_{app_id}.acf"))
+                        or os.path.exists(os.path.join(install_dir, f"appmanifest_{app_id}.acf"))
+                    )
+                    log_text = ""
+                    try:
+                        with open(log_path) as lf:
+                            log_text = lf.read()
                     except Exception:
                         pass
-                    if _install_cancel.is_set():
-                        _kill_install_proc()
-                        _cleanup_install(game_id)
-                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
-                        return
-                    lo = line.lower().strip()
-                    # License/ownership failure: the linked account does not own
-                    # this app. Even free-to-play Steam titles must be in the
-                    # account's library before steamcmd can download them.
-                    if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
-                        _log("steamcmd license error: " + line)
-                        _kill_install_proc()
-                        _cleanup_install(game_id)
-                        gname = p.get("name") or f"app {app_id}"
-                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Your Steam account '" + str(steam_user) + "' does not own " + str(gname) + ". Even free-to-play Steam games must be added to your Steam library (free) before they can be installed. Open the Steam store, add it to your library, then retry."})
-                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account does not own this game"})
-                        return
-                    if "invalid platform" in lo:
-                        _log("steamcmd platform error: " + line)
-                        _kill_install_proc()
-                        _cleanup_install(game_id)
-                        gname = p.get("name") or f"app {app_id}"
-                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "This game (" + str(gname) + ") is not available for the cloud PC's operating system (Linux). It may be Windows-only and cannot be installed on this Linux cloud instance."})
-                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Game not available for this platform"})
-                        return
-                    # Steam Guard (2FA) code requested — ask the user and feed it
-                    # back. Only before we're authenticated; once the download
-                    # starts we ignore any trailing guard-related log lines.
-                    if not authed and _is_steam_guard_prompt(lo):
-                        # The guard prompt spans several log lines; only request a
-                        # code once per prompt cycle (not once per matching line).
-                        if requesting:
-                            continue
-                        requesting = True
-                        guard_attempts += 1
-                        if guard_attempts > MAX_GUARD:
-                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
-                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
-                            _kill_install_proc()
-                            _cleanup_install(game_id)
-                            return
-                        code = _request_steam_guard(f"install-{game_id}")
-                        if code and proc.stdin:
-                            try:
-                                proc.stdin.write(code + "\n")
-                                proc.stdin.flush()
-                            except Exception:
-                                pass
-                        continue
-                    # A fresh login attempt or a rejection lets the next guard
-                    # prompt request a code again (one attempt per cycle).
-                    if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
-                        requesting = False
-                    dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
-                    if dl_match:
-                        downloaded = int(dl_match.group(1).replace(',', ''))
-                        percent = float(dl_match.group(2))
-                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                        continue
-                    # steamcmd self-update progress: "[  7%] Downloading update (...)"
-                    boot_match = re.search(r'\[\s*(\d+)%\]\s*downloading update', lo)
-                    if boot_match:
-                        percent = float(boot_match.group(1))
-                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                        continue
-                    # steamcmd game-download line: "Update state (0x61) downloading,
-                    # progress: 2.26 (2059360684 / 91106400180)" — percent then bytes.
-                    prog_match = re.search(r'progress:\s*([\d.]+)\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
-                    if prog_match:
-                        percent = float(prog_match.group(1))
-                        downloaded = int(prog_match.group(2).replace(',', ''))
-                        total_bytes = int(prog_match.group(3).replace(',', ''))
-                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                        continue
-                    prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
-                    if prog_match:
-                        percent = float(prog_match.group(1))
-                        downloaded = int(prog_match.group(2).replace(',', ''))
-                        total_bytes = int(prog_match.group(3).replace(',', ''))
-                        _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                        continue
-                    prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
-                    if prog_match:
-                        percent = float(prog_match.group(1))
-                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                        continue
-                    spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
-                    if spd_match:
-                        val = float(spd_match.group(1))
-                        unit = spd_match.group(2)
-                        speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
-                        continue
-                    size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
-                    if size_match:
-                        total_bytes = int(size_match.group(1).replace(',', ''))
-                        continue
-                    if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
-                        authed = True
-                        requesting = False
-                        percent = min(percent + 2, 95)
-                        _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                proc.wait()
-                try:
-                    logf.close()
-                except Exception:
-                    pass
-                # steamcmd sometimes prints "Error! App 'X' state is 0x602 after
-                # update job" yet still writes a complete appmanifest. Treat the
-                # install as successful if the manifest exists or success markers
-                # are present, rather than trusting the (often non-zero) exit code.
-                log_text = ""
-                try:
-                    with open(log_path) as lf:
-                        log_text = lf.read()
-                except Exception:
-                    pass
-                manifest_ok = os.path.exists(os.path.join(install_dir, f"appmanifest_{app_id}.acf"))
-                success_markers = ("fully installed", "fully updated", "Success! App")
-                ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
+                    success_markers = ("fully installed", "fully updated", "Success! App")
+                    attempt_ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
+                    return attempt_ok, platform_hit
+
+                _send_progress("downloading", 0)
+                # Phase 1: native Linux depots.
+                ok, platform_hit = _run_steamcmd_attempt(force_windows=False)
+                # Phase 2 (Proton): the title ships no Linux content — fetch the
+                # Windows depots; launch routes it through umu-run/Proton.
+                if not ok and platform_hit and not _cancelled():
+                    _log("retrying with @sSteamCmdForcePlatformType windows\n")
+                    _cleanup_install(game_id)
+                    os.makedirs(install_dir, exist_ok=True)
+                    with _install_lock:
+                        _installs[game_id]["proton"] = True
+                    _send_progress("checking", 1)
+                    ok, _ = _run_steamcmd_attempt(force_windows=True)
+                    if ok:
+                        try:
+                            with open(os.path.join(install_dir, ".kyro_proton"), "w") as mf:
+                                mf.write("windows\n")
+                        except Exception:
+                            pass
+                        print(f"[agent] proton install complete: game={game_id}", flush=True)
                 if ok:
                     _report_installed_games(ws, _games_base())
             elif install_method == "legendary" and app_id:
                 _send_progress("downloading", 0)
                 lcmd = _legendary_cmd() or ["legendary"]
                 proc = subprocess.Popen(lcmd + ["install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
-                _install_proc = proc
+                ctx["proc"] = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
-                    if _install_cancel.is_set():
-                        _kill_install_proc()
+                    if _cancelled():
+                        _kill_proc_group(proc)
                         _cleanup_install(game_id)
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
@@ -1268,12 +1430,12 @@ def _game_install(ws, p):
             elif install_method == "lgogdownloader" and app_id:
                 _send_progress("downloading", 0)
                 proc = subprocess.Popen(["lgogdownloader", "--download", f"--id={app_id}", "--directory", install_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
-                _install_proc = proc
+                ctx["proc"] = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
                 for line in proc.stdout:
-                    if _install_cancel.is_set():
-                        _kill_install_proc()
+                    if _cancelled():
+                        _kill_proc_group(proc)
                         _cleanup_install(game_id)
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
@@ -1291,46 +1453,129 @@ def _game_install(ws, p):
                 send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": f"Install method '{install_method}' not available."})
                 return
             if ok:
-                try:
-                    _install_dirs.pop(game_id, None)
-                except Exception:
-                    pass
+                with _install_lock:
+                    _installs.pop(game_id, None)
                 _send_progress("ready", 100)
-                send(ws, "game.install.done", {"gameId": game_id, "success": True})
+                send(ws, "game.install.done", {"gameId": game_id, "success": True, "proton": bool(ctx.get("proton"))})
             else:
                 send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Installation failed"})
         except Exception as ex:
             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": str(ex)})
         finally:
-            _install_proc = None
+            if logf:
+                try:
+                    logf.close()
+                except Exception:
+                    pass
+            with _install_lock:
+                ctx_done = _installs.pop(game_id, None)
+            if ctx_done and not ctx_done.get("cancel").is_set():
+                # A finished (success/fail) install has no live proc left; killing
+                # is harmless but only do it when it wasn't already cancelled.
+                pass
     threading.Thread(target=_do_install, daemon=True).start()
 
 
-def _kill_install_proc():
-    """Kill the install subprocess and its whole process group (the real
-    downloader is a child of the `script` wrapper and needs SIGKILL on the
-    group, not a plain terminate of the wrapper)."""
-    global _install_proc
-    if _install_proc and _install_proc.pid:
-        try:
-            os.killpg(os.getpgid(_install_proc.pid), signal.SIGKILL)
-        except Exception:
-            try:
-                _install_proc.kill()
-            except Exception:
-                pass
-
-
 def _game_install_cancel(ws, p):
-    global _install_proc, _install_cancel
-    _install_cancel.set()
-    _kill_install_proc()
-    _cleanup_install(p.get("id", ""))
-    send(ws, "game.install.done", {"gameId": p.get("id", ""), "success": False, "error": "Cancelled", "cancelled": True})
+    gid = p.get("id", "")
+    with _install_lock:
+        ctx = _installs.get(gid)
+    if ctx:
+        ctx["cancel"].set()
+        _kill_proc_group(ctx.get("proc"))
+        _cleanup_install(gid)
+    send(ws, "game.install.done", {"gameId": gid, "success": False, "error": "Cancelled", "cancelled": True})
 
 
 def _game_uninstall(ws, p):
-    send(ws, "game.uninstall.done", {"gameId": p.get("id", ""), "success": True})
+    """Really delete the game directory (never outside the games root), then
+    refresh the installed-games list."""
+    gid = p.get("id", "")
+    games_root = os.path.abspath(_games_base())
+    target = os.path.abspath(os.path.join(_games_base(), gid)) if gid else ""
+    ok = False
+    err = ""
+    if not target or not target.startswith(games_root + os.sep):
+        err = "invalid game id"
+    elif not os.path.isdir(target):
+        ok = True  # nothing on disk — treat as already uninstalled
+    else:
+        shutil.rmtree(target, ignore_errors=True)
+        ok = not os.path.isdir(target)
+        if not ok:
+            err = "failed to delete game directory"
+    # Refresh the frontend's installed list either way.
+    try:
+        threading.Thread(target=_report_installed_games, args=(ws, _games_base()), daemon=True).start()
+    except Exception:
+        pass
+    payload = {"gameId": gid, "success": ok}
+    if err:
+        payload["error"] = err
+    send(ws, "game.uninstall.done", payload)
+
+
+def _epic_auth_start(ws, p):
+    """Kick off legendary's Epic login: it prints the official Epic login URL
+    (using legendary's public client id). The user opens it in any browser,
+    signs in, and Epic hands back an authorizationCode to paste back."""
+    def _run():
+        lcmd = _legendary_cmd()
+        if not lcmd:
+            send(ws, "provider.epic.auth.url", {"ok": False, "error": "legendary not installed"})
+            return
+        try:
+            result = subprocess.run(lcmd + ["auth"], capture_output=True, text=True, timeout=60)
+            out = (result.stdout or "") + (result.stderr or "")
+            m = re.search(r'https://\S*epicgames\.com\S*', out)
+            if m:
+                send(ws, "provider.epic.auth.url", {"ok": True, "url": m.group(0)})
+            else:
+                send(ws, "provider.epic.auth.url", {"ok": False, "error": "no login url in legendary output", "detail": out[-400:]})
+        except Exception as ex:
+            send(ws, "provider.epic.auth.url", {"ok": False, "error": str(ex)})
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _epic_auth_complete(ws, p):
+    """Complete Epic linking with the user-pasted authorizationCode."""
+    code = str(p.get("code", "")).strip()
+    def _run():
+        lcmd = _legendary_cmd()
+        if not lcmd:
+            send(ws, "provider.link.result", {"provider": "epic", "ok": False, "error": "legendary not installed"})
+            return
+        if not code:
+            send(ws, "provider.link.result", {"provider": "epic", "ok": False, "error": "missing code"})
+            return
+        try:
+            result = subprocess.run(lcmd + ["auth", "--code", code], capture_output=True, text=True, timeout=90)
+            out = ((result.stdout or "") + (result.stderr or "")).strip()
+            ok = result.returncode == 0 or "successfully logged in" in out.lower() or "logged in as" in out.lower()
+            username = account_id = ""
+            if ok:
+                try:
+                    st = subprocess.run(lcmd + ["status", "--json"], capture_output=True, text=True, timeout=30)
+                    data = json.loads(st.stdout or "{}")
+                    acc = data.get("account") or {}
+                    username = acc.get("account_name") or acc.get("display_name") or ""
+                    account_id = acc.get("account_id") or ""
+                except Exception:
+                    pass
+                try:
+                    _report_linked_to_backend("epic", username or "Epic User", account_id=account_id)
+                except Exception:
+                    pass
+            send(ws, "provider.link.result", {
+                "provider": "epic",
+                "ok": ok,
+                "username": username or None,
+                "accountId": account_id or None,
+                **({} if ok else {"error": out[-300:] or "legendary auth failed"}),
+            })
+        except Exception as ex:
+            send(ws, "provider.link.result", {"provider": "epic", "ok": False, "error": str(ex)})
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def on_error(ws, err):
@@ -1387,6 +1632,14 @@ def main():
             _stats_stop.set()
         streaming.stop_all()
         apps.stop_all()
+        try:
+            with _install_lock:
+                procs = list(_game_procs.values())
+                _game_procs.clear()
+            for gp in procs:
+                _kill_proc_group(gp)
+        except Exception:
+            pass
         os._exit(0)
 
     signal.signal(signal.SIGTERM, _handle_signal)

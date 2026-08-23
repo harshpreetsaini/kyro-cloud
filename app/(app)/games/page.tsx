@@ -11,7 +11,6 @@ import { GamesIcon } from "@/components/icons";
 import type { GameEntry } from "@shared/types";
 import { Suspense } from "react";
 
-export const dynamic = "force-dynamic";
 
 type FilterType = "all" | "installed" | "running" | "linuxF2p";
 type SortType = "rating" | "name" | "release" | "metacritic";

@@ -201,6 +201,8 @@ export function GStreamerViewer({
       };
     }
 
+    const mseCleanup: { fn?: () => void } = {};
+
     function setupMSE(
       wsUrl: string,
       canvas: HTMLCanvasElement,
@@ -248,24 +250,33 @@ export function GStreamerViewer({
         }
       };
 
+      let rafId = 0;
       function drawFrame() {
+        if (cancelledRef.current) return;
         if (video.readyState >= 2) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
           ctx.drawImage(video, 0, 0);
           frameCountRef.current++;
         }
-        requestAnimationFrame(drawFrame);
+        rafId = requestAnimationFrame(drawFrame);
       }
-      video.play().then(() => requestAnimationFrame(drawFrame)).catch(() => {});
+      video.play().then(() => { rafId = requestAnimationFrame(drawFrame); }).catch(() => {});
 
       ws.onerror = () => setError("WebSocket connection failed");
+
+      mseCleanup.fn = () => {
+        try { cancelAnimationFrame(rafId); } catch {}
+        try { video.pause(); } catch {}
+        try { if (video.src) { URL.revokeObjectURL(video.src); video.src = ""; } } catch {}
+        try { ws.close(); } catch {}
+      };
     }
 
     return () => {
       cancelledRef.current = true;
       clearInterval(fpsInterval);
-      try { decoderRef.current?.close(); } catch {}
+      try { mseCleanup.fn?.(); } catch {}
       try { audioGainRef.current?.disconnect(); } catch {}
       try { audioCtxRef.current?.close(); } catch {}
       try { wsRef.current?.close(); } catch {}

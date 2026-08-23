@@ -1,9 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { initDb, getProfile, saveProfile, setProvider, getOrCreateOwnerUser } from "@/lib/db.mjs";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/jwt";
 
 const SERVICE_KEY = process.env.BACKEND_SERVICE_KEY || "";
 const BACKEND_URL = process.env.BACKEND_URL || "https://kyro-cloud-3fp0.onrender.com";
+
+// ---- credential encryption at rest (AES-256-GCM) --------------------------
+// Key chain MUST match backend/server.mjs exactly so both sides can decrypt.
+function credKey() {
+  const secret = process.env.CREDENTIAL_SECRET || process.env.BACKEND_SERVICE_KEY || process.env.RUNTIME_AUTH_SECRET || "";
+  return crypto.createHash("sha256").update(secret).digest();
+}
+function encryptSecret(plain: unknown): string {
+  const s = String(plain ?? "");
+  if (!s) return "";
+  if (!process.env.CREDENTIAL_SECRET && !process.env.BACKEND_SERVICE_KEY && !process.env.RUNTIME_AUTH_SECRET) {
+    return "obf:" + Buffer.from(s, "utf8").toString("base64");
+  }
+  try {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", credKey(), iv);
+    const enc = Buffer.concat([cipher.update(s, "utf8"), cipher.final()]);
+    return `${iv.toString("hex")}:${cipher.getAuthTag().toString("hex")}:${enc.toString("hex")}`;
+  } catch {
+    return "";
+  }
+}
+function decryptSecret(cipherText: unknown): string {
+  const c = String(cipherText ?? "");
+  if (!c) return "";
+  try {
+    if (c.startsWith("obf:")) return Buffer.from(c.slice(4), "base64").toString("utf8");
+    const [ivH, tagH, encH] = c.split(":");
+    if (!ivH || !tagH || !encH) return "";
+    const decipher = crypto.createDecipheriv("aes-256-gcm", credKey(), Buffer.from(ivH, "hex"));
+    decipher.setAuthTag(Buffer.from(tagH, "hex"));
+    return Buffer.concat([decipher.update(Buffer.from(encH, "hex")), decipher.final()]).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+function safeEqStr(a: string, b: string): boolean {
+  const ab = Buffer.from(String(a ?? ""));
+  const bb = Buffer.from(String(b ?? ""));
+  if (ab.length === 0 || ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+// Incoming plaintext record -> ciphertext-at-rest record.
+function toStored(rec: any) {
+  if (!rec) return rec;
+  const out: any = { ...rec };
+  if (out.password) { out.passwordEnc = encryptSecret(out.password); delete out.password; }
+  if (out.accessToken) { out.accessTokenEnc = encryptSecret(out.accessToken); delete out.accessToken; }
+  if (out.refreshToken) { out.refreshTokenEnc = encryptSecret(out.refreshToken); delete out.refreshToken; }
+  return out;
+}
+// Stored ciphertext -> wire/plaintext form (service path only).
+function toWire(rec: any) {
+  if (!rec) return rec;
+  const out: any = { ...rec };
+  if (out.passwordEnc) { out.password = decryptSecret(out.passwordEnc); delete out.passwordEnc; }
+  if (out.accessTokenEnc) { out.accessToken = decryptSecret(out.accessTokenEnc); delete out.accessTokenEnc; }
+  if (out.refreshTokenEnc) { out.refreshToken = decryptSecret(out.refreshTokenEnc); delete out.refreshTokenEnc; }
+  return out;
+}
 
 let initialized = false;
 async function ensureInit() {
@@ -36,6 +97,7 @@ async function relayToBackend(record: any) {
       method: "POST",
       headers: { "content-type": "application/json", "x-service-key": SERVICE_KEY },
       body: JSON.stringify(record),
+      signal: AbortSignal.timeout(8000),
     });
   } catch (e) {
     console.error("[provider/link] backend relay failed:", (e as any)?.message);
@@ -50,7 +112,7 @@ async function relayToBackend(record: any) {
 export async function POST(req: NextRequest) {
   await ensureInit();
   const serviceKey = req.headers.get("x-service-key") || "";
-  const isService = SERVICE_KEY && serviceKey === SERVICE_KEY;
+  const isService = !!SERVICE_KEY && safeEqStr(serviceKey, SERVICE_KEY);
 
   let body: any = {};
   try {
@@ -63,7 +125,8 @@ export async function POST(req: NextRequest) {
   if (isService) {
     const userId = await resolveServiceUserId(body.userId);
     if (userId == null) return NextResponse.json({ ok: false, error: "Missing userId" }, { status: 400 });
-    const record = {
+    // Store ciphertext at rest; the backend keeps its own plaintext session cache.
+    const record = toStored({
       username: body.username || "",
       password: body.password || "",
       accountId: body.accountId || "",
@@ -71,7 +134,7 @@ export async function POST(req: NextRequest) {
       refreshToken: body.refreshToken || "",
       error: body.error || "",
       linkedAt: Date.now(),
-    };
+    });
     await setProvider(userId, body.provider, record);
     return NextResponse.json({ ok: true });
   }
@@ -80,7 +143,7 @@ export async function POST(req: NextRequest) {
   if (!session || session.userId == null) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
-  const record = {
+  const plainRecord = {
     username: body.username || "",
     password: body.password || "",
     accountId: body.accountId || "",
@@ -89,9 +152,9 @@ export async function POST(req: NextRequest) {
     error: body.error || "",
     linkedAt: Date.now(),
   };
-  await setProvider(session.userId, body.provider, record);
+  await setProvider(session.userId, body.provider, toStored(plainRecord));
   // Relay to the cloud agent (backend) for this session's installs.
-  await relayToBackend({ ...record, provider: body.provider });
+  await relayToBackend({ ...plainRecord, provider: body.provider });
   return NextResponse.json({ ok: true });
 }
 
@@ -101,7 +164,7 @@ export async function GET(req: NextRequest) {
   // account (including the secret) so the cloud agent can install after a
   // backend/agent restart without forcing the user to re-link.
   const serviceKey = req.headers.get("x-service-key") || "";
-  const isService = SERVICE_KEY && serviceKey === SERVICE_KEY;
+  const isService = !!SERVICE_KEY && safeEqStr(serviceKey, SERVICE_KEY);
   if (isService) {
     const userId = await resolveServiceUserId(req.nextUrl.searchParams.get("userId"));
     const provider = req.nextUrl.searchParams.get("provider");
@@ -110,7 +173,8 @@ export async function GET(req: NextRequest) {
     }
     const profile = await getProfile(userId);
     const rec = (profile.providers || {})[provider];
-    return NextResponse.json({ ok: true, data: rec ? { ...rec } : null });
+    // Decrypt back to the wire form the agent needs (service path only).
+    return NextResponse.json({ ok: true, data: rec ? toWire({ ...rec }) : null });
   }
 
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value || req.headers.get("authorization")?.replace(/^Bearer\s+/i, ""));

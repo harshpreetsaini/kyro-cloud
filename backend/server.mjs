@@ -26,13 +26,21 @@ function uid() {
 }
 
 // ---------- helpers ----------
+function safeEq(a, b) {
+  const ab = Buffer.from(String(a ?? ""));
+  const bb = Buffer.from(String(b ?? ""));
+  if (ab.length === 0 || ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 function corsHeaders(req) {
+  // Strict origin check — never reflect an arbitrary origin with credentials.
   const origin = req.headers.origin;
-  // Never reflect "*" with credentials; use the configured FRONTEND_URL.
-  const allow = FRONTEND_URL ? FRONTEND_URL : origin || "*";
+  const allow = FRONTEND_URL || "*";
+  const value = !origin || origin === FRONTEND_URL ? allow : FRONTEND_URL;
   return {
-    "Access-Control-Allow-Origin": allow,
-    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Origin": value,
+    "Access-Control-Allow-Credentials": value !== "*" ? "true" : undefined,
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
   };
@@ -60,10 +68,21 @@ a{color:#fff;text-decoration:none}</style></head>
   res.end(html);
 }
 
+const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10MB — uploads are small config/JSON
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
+    let total = 0;
+    req.on("data", (c) => {
+      total += c.length;
+      if (total > MAX_BODY_BYTES) {
+        reject(new Error("Body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -87,16 +106,34 @@ function readJson(req) {
 // in-memory cache of the active user's linked accounts for fast agent relay.
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+let _keyWarned = false;
 function _secretKey() {
-  const secret = process.env.RUNTIME_AUTH_SECRET || "dev-insecure-secret-change-me";
+  // Dedicated credential key first; falls back to shared secrets that are
+  // provisioned on BOTH sides (backend + Vercel) — order must match
+  // app/api/provider/link/route.ts exactly.
+  const secret =
+    process.env.CREDENTIAL_SECRET ||
+    process.env.BACKEND_SERVICE_KEY ||
+    process.env.RUNTIME_AUTH_SECRET ||
+    "";
+  if (!secret && !_keyWarned) {
+    _keyWarned = true;
+    console.error("[creds] No CREDENTIAL_SECRET/BACKEND_SERVICE_KEY/RUNTIME_AUTH_SECRET set — storing provider credentials obfuscated only. Set a secret to enable AES-256-GCM at rest.");
+  }
   return crypto.createHash("sha256").update(secret).digest();
 }
 function encryptSecret(plain) {
+  const s = String(plain ?? "");
+  if (!s) return "";
   try {
     const key = _secretKey();
+    if (!process.env.CREDENTIAL_SECRET && !process.env.RUNTIME_AUTH_SECRET && !process.env.BACKEND_SERVICE_KEY) {
+      // Reversible obfuscation fallback (never plaintext) when no key material exists.
+      return "obf:" + Buffer.from(s, "utf8").toString("base64");
+    }
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-    const enc = Buffer.concat([cipher.update(String(plain ?? ""), "utf8"), cipher.final()]);
+    const enc = Buffer.concat([cipher.update(s, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
     return `${iv.toString("hex")}:${tag.toString("hex")}:${enc.toString("hex")}`;
   } catch {
@@ -104,8 +141,11 @@ function encryptSecret(plain) {
   }
 }
 function decryptSecret(cipher) {
+  const c = String(cipher || "");
+  if (!c) return "";
   try {
-    const [ivH, tagH, encH] = String(cipher || "").split(":");
+    if (c.startsWith("obf:")) return Buffer.from(c.slice(4), "base64").toString("utf8");
+    const [ivH, tagH, encH] = c.split(":");
     if (!ivH || !tagH || !encH) return "";
     const key = _secretKey();
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivH, "hex"));
@@ -143,19 +183,37 @@ globalThis.__setActiveLinked = (v) => { activeLinked = v || {}; };
 
 // Durable backend store for linked provider accounts (survives backend
 // restarts without depending on the browser being connected or Vercel).
+// Written atomically (tmp+rename) and encrypted at rest.
 const LINKS_FILE = path.join(DATA_DIR, "provider_links.json");
 function loadLinked() {
   try {
     const raw = fs.readFileSync(LINKS_FILE, "utf8");
     const d = JSON.parse(raw);
-    if (d && typeof d === "object") activeLinked = d;
-  } catch {}
+    if (d && typeof d === "object") {
+      // Decrypt into the in-memory (plaintext, agent-facing) cache.
+      for (const [p, rec] of Object.entries(d)) {
+        try { activeLinked[p] = toWireProvider(rec); } catch {}
+      }
+    }
+  } catch (e) {
+    if (e && e.code !== "ENOENT") {
+      console.error("[provider/link] failed to load links file:", e && e.message ? e.message : e);
+    }
+  }
 }
 function saveLinked() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(LINKS_FILE, JSON.stringify(activeLinked));
-  } catch {}
+    const stored = {};
+    for (const [p, rec] of Object.entries(activeLinked)) {
+      try { stored[p] = toStoredProvider(rec); } catch { stored[p] = { ...rec }; }
+    }
+    const tmp = LINKS_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(stored));
+    fs.renameSync(tmp, LINKS_FILE);
+  } catch (e) {
+    console.error("[provider/link] failed to persist links file:", e && e.message ? e.message : e);
+  }
 }
 loadLinked();
 
@@ -172,6 +230,7 @@ async function persistLinkedToVercel(provider, record, userId) {
       method: "POST",
       headers: { "content-type": "application/json", "x-service-key": svc },
       body: JSON.stringify({ ...record, provider, userId }),
+      signal: AbortSignal.timeout(8000),
     });
   } catch (e) {
     console.error("[provider/link] persist to Vercel failed:", e && e.message ? e.message : e);
@@ -189,7 +248,7 @@ async function fetchLinkedFromVercel(provider) {
   try {
     const r = await fetch(
       `${base}/api/provider/link?provider=${encodeURIComponent(provider)}&userId=${userId}`,
-      { headers: { "x-service-key": svc } }
+      { headers: { "x-service-key": svc }, signal: AbortSignal.timeout(8000) }
     );
     if (!r.ok) return null;
     const j = await r.json();
@@ -279,11 +338,13 @@ async function handleApi(req, res, url) {
     const svcKey = process.env.BACKEND_SERVICE_KEY;
     const agentToken = req.headers["x-agent-token"];
     const secret = process.env.RUNTIME_AUTH_SECRET;
-    const authedByService = svcKey && req.headers["x-service-key"] === svcKey;
-    const authedByAgent = !!secret && !!agentToken && agentToken === secret;
+    const authedByService = !!svcKey && safeEq(req.headers["x-service-key"], svcKey);
+    const authedByAgent = !!secret && !!agentToken && safeEq(agentToken, secret);
+    let authedBySession = false;
     if (!authedByService && !authedByAgent) {
       const u = await requireAuth(req, res);
       if (!u) return;
+      authedBySession = true;
     }
     const mgr = getManager();
 
@@ -334,9 +395,16 @@ async function handleApi(req, res, url) {
     }
     if (method === "GET") {
       const provider = url.searchParams.get("provider");
+      // Secrets are only for the agent/service paths. A plain session user
+      // gets a redacted record (username/accountId/linkedAt only).
+      const redact = (rec) => {
+        if (!rec || !authedBySession) return rec;
+        const { password, accessToken, refreshToken, ...rest } = rec;
+        return rest;
+      };
       if (provider) {
         let rec = activeLinked[provider] || null;
-        if (!rec) {
+        if (!rec && !authedBySession) {
           // Durable fallback: the in-memory cache is gone (backend restart),
           // but the link was persisted to Vercel — recover it for the agent.
           try {
@@ -348,11 +416,73 @@ async function handleApi(req, res, url) {
             }
           } catch {}
         }
-        return sendJson(req, res, 200, { ok: true, data: rec });
+        return sendJson(req, res, 200, { ok: true, data: redact(rec) });
       }
-      return sendJson(req, res, 200, { ok: true, data: activeLinked });
+      return sendJson(req, res, 200, { ok: true, data: redact(activeLinked) });
+    }
+    if (method === "DELETE") {
+      const provider = url.searchParams.get("provider");
+      if (!provider) return sendJson(req, res, 400, { ok: false, error: "Missing provider" });
+      delete activeLinked[provider];
+      saveLinked();
+      // Tell the agent to wipe its local creds for this provider.
+      mgr.sendToAgent({ type: "provider.logout", payload: { provider } });
+      // Instant UI feedback: the linked state is gone.
+      mgr.broadcast({
+        type: "provider.login.result",
+        payload: { provider, ok: false },
+        ts: Date.now(),
+      });
+      return sendJson(req, res, 200, { ok: true });
     }
     return sendJson(req, res, 405, { ok: false, error: "Method not allowed" });
+  }
+
+  // Epic device-link (account linking without a registered Epic OAuth app):
+  // start returns legendary's official login URL; complete exchanges the
+  // user-pasted authorizationCode via legendary on the agent.
+  if (p === "/api/provider/epic/devicelink" && method === "POST") {
+    const u = await requireAuth(req, res);
+    if (!u) return;
+    const body = await readJson(req);
+    const mgr = getManager();
+    if (body.action === "start") {
+      if (!mgr.agentAttached) return sendJson(req, res, 503, { ok: false, error: "Runtime agent not connected" });
+      mgr.sendToAgent({ type: "provider.epic.auth.start", payload: {} });
+      try {
+        const ev = await mgr.waitAgentEvent("provider.epic.auth.url", 30000);
+        const url2 = ev?.payload?.url;
+        if (!ev?.payload?.ok || !url2) {
+          return sendJson(req, res, 502, { ok: false, error: ev?.payload?.error || "agent returned no login URL" });
+        }
+        return sendJson(req, res, 200, { ok: true, data: { loginUrl: url2 } });
+      } catch {
+        return sendJson(req, res, 504, { ok: false, error: "Timed out waiting for login URL from the runtime agent" });
+      }
+    }
+    if (body.action === "complete") {
+      const code = String(body.code || "").trim();
+      if (!code) return sendJson(req, res, 400, { ok: false, error: "Missing code" });
+      if (!mgr.agentAttached) return sendJson(req, res, 503, { ok: false, error: "Runtime agent not connected" });
+      mgr.sendToAgent({ type: "provider.epic.auth.complete", payload: { code } });
+      try {
+        const ev = await mgr.waitAgentEvent("provider.link.result", 60000);
+        const ok = !!ev?.payload?.ok;
+        mgr.broadcast({
+          type: "provider.login.result",
+          payload: { provider: "epic", ok, username: ev?.payload?.username || undefined, error: ev?.payload?.error },
+          ts: Date.now(),
+        });
+        return sendJson(req, res, ok ? 200 : 400, {
+          ok,
+          data: { username: ev?.payload?.username || null },
+          error: ok ? undefined : ev?.payload?.error || "Epic link failed",
+        });
+      } catch {
+        return sendJson(req, res, 504, { ok: false, error: "Timed out waiting for the Epic link result" });
+      }
+    }
+    return sendJson(req, res, 400, { ok: false, error: "Unknown action" });
   }
 
   // everything else requires auth

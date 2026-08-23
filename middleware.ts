@@ -1,13 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession, SESSION_COOKIE } from "./lib/auth/jwt";
 
-const PUBLIC_PATHS = ["/login", "/callback", "/api/auth/login", "/api/auth/logout", "/api/auth/google", "/api/auth/google/callback", "/api/health", "/api/games/screenshots", "/api/providers/steam/callback", "/api/providers/epic/callback", "/api/providers/gog/callback"];
+// Edge-runtime-safe constant-time comparison (no Node crypto).
+function safeEq(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+const PUBLIC_PATHS = [
+  "/login",
+  "/callback",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/google",
+  "/api/auth/google/callback",
+  "/api/health",
+  "/api/games/screenshots",
+];
+
+// OAuth callback routes are public but still validated inside their handlers
+// (state cookie + provider identity). Keep the list explicit — no wildcard
+// regexes that accidentally expose handler families.
+const PUBLIC_PATTERNS: RegExp[] = [
+  /^\/api\/providers\/(epic|gog)\/login$/, // begins the OAuth redirect (no session data returned)
+  /^\/api\/providers\/epic-gog\/callback$/,
+];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
-  if (/^\/api\/providers\/[^/]+\/(login|logout|callback)$/.test(pathname)) return true;
-  if (/^\/api\/providers\/(steam|epic|gog)\/callback$/.test(pathname)) return true;
-  return false;
+  return PUBLIC_PATTERNS.some((re) => re.test(pathname));
 }
 
 // The backend (Render) forwards provider links to this Vercel route with a
@@ -15,14 +38,14 @@ function isPublicPath(pathname: string): boolean {
 function isServiceKeyRequest(req: NextRequest): boolean {
   const key = process.env.BACKEND_SERVICE_KEY;
   if (!key) return false;
-  const provided = req.headers.get("x-service-key");
-  return !!provided && provided === key;
+  return safeEq(req.headers.get("x-service-key") || "", key);
 }
 
 function applyCors(res: NextResponse, origin: string | null) {
-  const allowed = process.env.FRONTEND_URL || "*";
-  res.headers.set("Access-Control-Allow-Origin", origin && allowed !== "*" ? origin : allowed);
-  res.headers.set("Access-Control-Allow-Credentials", "true");
+  const allowed = process.env.FRONTEND_URL || "";
+  const value = origin && allowed && origin === allowed ? allowed : allowed || "*";
+  res.headers.set("Access-Control-Allow-Origin", value);
+  if (value !== "*") res.headers.set("Access-Control-Allow-Credentials", "true");
   res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 }

@@ -56,8 +56,7 @@ export function GameCard({
 
   const size = getSize();
 
-  return (
-    <Link href={`/games/${game.slug}`}>
+  const inner = (
       <div
         className="group relative flex flex-col overflow-hidden rounded-2xl bg-surface clay-sm hover:shadow-clay hover:border-accent/30 transition-all duration-200 hover:scale-[1.02] cursor-pointer"
         onMouseEnter={() => setHovered(true)}
@@ -202,6 +201,10 @@ export function GameCard({
           </div>
         </div>
       </div>
-    </Link>
   );
+
+  // Synced-only games have no catalog page — render without a link instead of
+  // linking to /games/undefined.
+  if (!game.slug) return inner;
+  return <Link href={`/games/${game.slug}`}>{inner}</Link>;
 }

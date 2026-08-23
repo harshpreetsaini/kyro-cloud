@@ -26,7 +26,13 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const saved = localStorage.getItem(KEY);
-    if (saved) setSettings((s) => ({ ...s, ...JSON.parse(saved) }));
+    if (!saved) return;
+    try {
+      setSettings((s) => ({ ...s, ...JSON.parse(saved) }));
+    } catch {
+      // Corrupt settings blob — ignore rather than crash the page.
+      localStorage.removeItem(KEY);
+    }
   }, []);
 
   function save() {

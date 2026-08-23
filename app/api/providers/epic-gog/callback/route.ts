@@ -26,9 +26,11 @@ async function relayToBackend(payload: Record<string, unknown>) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
-  const rawState = searchParams.get("state") || "epic";
-  const stateLower = rawState.toLowerCase();
-  const provider = stateLower === "gog" ? "gog" : "epic";
+  const rawState = searchParams.get("state") || "";
+  // Provider identity comes from the oauth_provider cookie the login route set
+  // (NOT from the state string, which is random CSRF material).
+  const cookieProvider = req.cookies.get("oauth_provider")?.value;
+  const provider = cookieProvider === "gog" ? "gog" : cookieProvider === "epic" ? "epic" : null;
   const origin = new URL(req.url).origin;
   const redirectUri = `${origin}/api/providers/epic-gog/callback`;
 
@@ -37,12 +39,17 @@ export async function GET(req: NextRequest) {
   // instead of a generic failure.
   const providerErr = searchParams.get("error");
   if (providerErr) {
-    return NextResponse.redirect(new URL(`/providers?error=${provider}_${providerErr}`, req.url));
+    return NextResponse.redirect(new URL(`/providers?error=${provider || "oauth"}_${providerErr}`, req.url));
   }
 
-  // CSRF: the login route stored a random state in the oauth_state cookie.
+  if (!provider) {
+    return NextResponse.redirect(new URL(`/providers?error=oauth_unknown_provider`, req.url));
+  }
+
+  // CSRF: the random state is MANDATORY — an attacker-crafted callback URL
+  // cannot bypass validation by omitting it.
   const cookieState = req.cookies.get("oauth_state")?.value;
-  if (cookieState && cookieState !== rawState) {
+  if (!cookieState || !rawState || cookieState !== rawState) {
     return NextResponse.redirect(new URL(`/providers?error=${provider}_state_mismatch`, req.url));
   }
 
@@ -51,7 +58,7 @@ export async function GET(req: NextRequest) {
   }
 
   // ── GOG ──────────────────────────────────────────────────────────────
-  if (stateLower === "gog") {
+  if (provider === "gog") {
     const clientId = process.env.GOG_CLIENT_ID;
     const clientSecret = process.env.GOG_CLIENT_SECRET || "";
     if (!clientId || !clientSecret) {
@@ -60,6 +67,7 @@ export async function GET(req: NextRequest) {
     try {
       const tokenRes = await fetch("https://auth.gog.com/token", {
         method: "POST",
+        signal: AbortSignal.timeout(10000),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           client_id: clientId,
@@ -75,6 +83,7 @@ export async function GET(req: NextRequest) {
       }
 
       const profileRes = await fetch("https://embed.gog.com/userData.json", {
+        signal: AbortSignal.timeout(10000),
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
       const profile = await profileRes.json();
@@ -84,6 +93,7 @@ export async function GET(req: NextRequest) {
       let games: any[] = [];
       try {
         const gamesRes = await fetch("https://embed.gog.com/user/data/games", {
+          signal: AbortSignal.timeout(10000),
           headers: { Authorization: `Bearer ${tokenData.access_token}` },
         });
         const gamesData = await gamesRes.json();
@@ -94,6 +104,7 @@ export async function GET(req: NextRequest) {
       if (games.length > 0) {
         try {
           const detailsRes = await fetch("https://embed.gog.com/account/getFilteredProducts?mediaType=1&page=1", {
+            signal: AbortSignal.timeout(10000),
             headers: { Authorization: `Bearer ${tokenData.access_token}` },
           });
           const details = await detailsRes.json();
@@ -146,6 +157,7 @@ export async function GET(req: NextRequest) {
 
     const tokenRes = await fetch("https://account-public-service-prod.ol.epicgames.com/account/api/oauth/token", {
       method: "POST",
+      signal: AbortSignal.timeout(10000),
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${basic}`,
@@ -158,6 +170,7 @@ export async function GET(req: NextRequest) {
     }
 
     const profileRes = await fetch("https://account-public-service-prod.ol.epicgames.com/account/api/public/account", {
+      signal: AbortSignal.timeout(10000),
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const profile = await profileRes.json();

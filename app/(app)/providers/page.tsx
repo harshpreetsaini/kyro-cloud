@@ -54,7 +54,13 @@ export default function ProvidersPage() {
   const [steamPass, setSteamPass] = useState("");
   const [linking, setLinking] = useState(false);
   const [showSteamForm, setShowSteamForm] = useState(false);
+  const [showDeviceLink, setShowDeviceLink] = useState(false);
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlUrl, setDlUrl] = useState<string | null>(null);
+  const [dlCode, setDlCode] = useState("");
+  const [dlError, setDlError] = useState<string | null>(null);
   const pendingAutoSync = useRef<string | null>(null);
+  const linkIvRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (providerLinked?.steam) setLinking(false);
@@ -85,14 +91,22 @@ export default function ProvidersPage() {
     fetchProviders();
     // After an OAuth connect, poll briefly so auto-sync fires as soon as the
     // backend session reports the account connected (it may lag the redirect).
+    let oauthIv: ReturnType<typeof setInterval> | null = null;
     if (pendingAutoSync.current) {
       let tries = 0;
-      const iv = setInterval(() => {
+      oauthIv = setInterval(() => {
         tries += 1;
         fetchProviders();
-        if (tries >= 12 || !pendingAutoSync.current) clearInterval(iv);
+        if (tries >= 12 || !pendingAutoSync.current) {
+          if (oauthIv) clearInterval(oauthIv);
+          oauthIv = null;
+        }
       }, 2000);
     }
+    return () => {
+      if (oauthIv) clearInterval(oauthIv);
+      if (linkIvRef.current) clearInterval(linkIvRef.current);
+    };
   }, []);
 
   const fetchProviders = async () => {
@@ -125,10 +139,10 @@ export default function ProvidersPage() {
           }
         }
       } else {
-        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "oauth", installMethod: "steamcmd" })));
+        setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: ["steam","epic","gog"].includes(p.id) ? "oauth" as const : "coming" as const, installMethod: p.id === "steam" ? "steamcmd" : p.id === "epic" ? "legendary" : "lgogdownloader" })));
       }
     } catch {
-      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: "oauth", installMethod: "steamcmd" })));
+      setProviders(PROVIDERS.map((p) => ({ ...p, loggedIn: false, method: ["steam","epic","gog"].includes(p.id) ? "oauth" as const : "coming" as const, installMethod: p.id === "steam" ? "steamcmd" : p.id === "epic" ? "legendary" : "lgogdownloader" })));
     } finally {
       setLoading(false);
     }
@@ -155,14 +169,76 @@ export default function ProvidersPage() {
     }
   };
 
-  const handleLogout = async (providerId: string) => {
+  // ── Epic device-link (account linking without an Epic OAuth app) ──
+  const deviceLinkStart = async () => {
+    setDlBusy(true);
+    setDlError(null);
     try {
-      await fetch("/api/providers/logout", {
+      const res = await fetch("/api/providers/epic/devicelink", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ action: "start" }),
+      });
+      const data = await res.json();
+      if (data.ok && data.data?.loginUrl) {
+        setDlUrl(data.data.loginUrl as string);
+        window.open(data.data.loginUrl, "_blank", "noopener");
+      } else {
+        setDlError(data.error || "Could not get a login link — is your cloud PC connected?");
+      }
+    } catch {
+      setDlError("Network error");
+    } finally {
+      setDlBusy(false);
+    }
+  };
+
+  const deviceLinkComplete = async () => {
+    if (!dlCode.trim()) return;
+    setDlBusy(true);
+    setDlError(null);
+    try {
+      pendingAutoSync.current = "epic";
+      const res = await fetch("/api/providers/epic/devicelink", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ action: "complete", code: dlCode.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setShowDeviceLink(false);
+        setDlUrl(null);
+        setDlCode("");
+        setLoginSuccess("Epic Games — Connected");
+      } else {
+        pendingAutoSync.current = null;
+        setDlError(typeof data.error === "string" ? data.error : "Link failed — check the code and retry.");
+      }
+    } catch {
+      pendingAutoSync.current = null;
+      setDlError("Network error");
+    } finally {
+      setDlBusy(false);
+    }
+  };
+
+  const handleLogout = async (providerId: string) => {
+    setSyncing(providerId);
+    try {
+      const res = await fetch("/api/providers/logout", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
         body: JSON.stringify({ providerId }),
       });
-    } catch {}
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setLoginError(j.error || `Disconnect failed (${res.status})`);
+      }
+    } catch {
+      setLoginError("Disconnect failed — network error");
+    } finally {
+      setSyncing(null);
+    }
     fetchProviders();
   };
 
@@ -178,11 +254,13 @@ export default function ProvidersPage() {
     // as soon as the account is persisted — even if the WS push was missed.
     pendingAutoSync.current = "steam";
     let tries = 0;
-    const iv = setInterval(() => {
+    if (linkIvRef.current) clearInterval(linkIvRef.current);
+    linkIvRef.current = setInterval(() => {
       tries += 1;
       fetchProviders();
       if (tries >= 12) {
-        clearInterval(iv);
+        if (linkIvRef.current) clearInterval(linkIvRef.current);
+        linkIvRef.current = null;
         setLinking(false);
       }
     }, 2000);
@@ -328,10 +406,56 @@ export default function ProvidersPage() {
                 Coming Soon
               </Button>
             ) : (
-              <Button size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={() => handleOAuthLogin(provider.id)}>
-                <ConnectIcon className="w-4 h-4" />
-                {CONNECT_LABEL[provider.id] || `Connect ${provider.name} Account`}
-              </Button>
+              <div className="flex flex-col gap-2">
+                <Button size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={() => handleOAuthLogin(provider.id)}>
+                  <ConnectIcon className="w-4 h-4" />
+                  {CONNECT_LABEL[provider.id] || `Connect ${provider.name} Account`}
+                </Button>
+                {provider.id === "epic" && (
+                  <>
+                    <button
+                      onClick={() => setShowDeviceLink((v) => !v)}
+                      className="text-[11px] text-muted hover:text-accent underline underline-offset-2"
+                    >
+                      No Epic app? Link via device code →
+                    </button>
+                    {showDeviceLink && (
+                      <div className="clay-inset rounded-xl p-3 flex flex-col gap-2 text-xs">
+                        {!dlUrl ? (
+                          <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
+                            {dlBusy ? "Contacting runtime…" : "1. Get Epic Login Link"}
+                          </Button>
+                        ) : (
+                          <>
+                            <p className="text-muted">
+                              2. Sign in at the opened tab, then copy the{" "}
+                              <span className="text-accent font-mono">authorizationCode</span> value Epic shows.
+                            </p>
+                            <a href={dlUrl} target="_blank" rel="noopener noreferrer" className="text-accent break-all line-clamp-2">
+                              Reopen login page ↗
+                            </a>
+                            <input
+                              value={dlCode}
+                              onChange={(e) => setDlCode(e.target.value)}
+                              placeholder="Paste authorizationCode here"
+                              className="bg-bg/60 rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-accent font-mono"
+                            />
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={deviceLinkComplete} disabled={dlBusy || !dlCode.trim()} className="flex-1">
+                                {dlBusy ? "Linking…" : "3. Link Account"}
+                              </Button>
+                              <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
+                                New code
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                        {dlError && <p className="text-danger">{dlError}</p>}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             )}
           </div>
         ))}

@@ -202,8 +202,38 @@ WRAP
   echo "[bootstrap] steamcmd wrapper installed (runs as gamer)" >> /tmp/luna-agent.log
 fi
 
+# ── Proton (Windows games) via umu-launcher ────────────────────────────
+# umu-run runs any game executable under a current Proton build with a
+# per-game WINEPREFIX — no Steam client required. DXVK prerequisites
+# (Vulkan loader + ICDs, i386 multilib for steamcmd) are installed above.
+echo "[bootstrap] installing umu-launcher (Proton support)..." >> /tmp/luna-agent.log
+if ! command -v umu-run >/dev/null 2>&1; then
+  # Preferred: pip wheel (ships the umu-run entrypoint).
+  python3 -m pip install --quiet --break-system-packages umu-launcher 2>/dev/null \
+    || pip3 install --quiet --break-system-packages umu-launcher 2>/dev/null \
+    || pip3 install --quiet umu-launcher 2>/dev/null || true
+fi
+if ! command -v umu-run >/dev/null 2>&1; then
+  # Fallback: official release tarball to /usr/local/bin.
+  UMU_VER="$(curl -fsSL https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)"$/\1/')"
+  [ -z "$UMU_VER" ] && UMU_VER="1.1.4"
+  curl -fsSL "https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VER}/umu-launcher-${UMU_VER}-ubuntu-22.04.tar.gz" -o /tmp/umu.tgz 2>/dev/null || true
+  if [ -s /tmp/umu.tgz ]; then
+    tar -xzf /tmp/umu.tgz -C /tmp 2>/dev/null || true
+    find /tmp -maxdepth 3 -type f -name umu-run -exec install -m 0755 {} /usr/local/bin/umu-run \; 2>/dev/null || true
+    rm -f /tmp/umu.tgz
+  fi
+fi
+mkdir -p /home/gamer/games
+chown -R gamer:gamer /home/gamer/games 2>/dev/null || true
+if command -v umu-run >/dev/null 2>&1; then
+  echo "[bootstrap] umu-run OK: $(command -v umu-run)" >> /tmp/luna-agent.log
+else
+  echo "[bootstrap] [WARN] umu-run unavailable — Windows titles will fail to launch" >> /tmp/luna-agent.log
+fi
+
 echo "[bootstrap] verifying components:" >> /tmp/luna-agent.log
-for b in Xvfb x11vnc openbox steamcmd gst-launch-1.0; do
+for b in Xvfb x11vnc openbox steamcmd gst-launch-1.0 umu-run; do
   if command -v "$b" >/dev/null 2>&1; then
     echo "  [OK]   $b" >> /tmp/luna-agent.log
   else

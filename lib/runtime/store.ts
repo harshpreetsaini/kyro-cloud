@@ -209,7 +209,8 @@ function connect() {
         state = { ...state, session: event.payload as SessionInfo };
         const st = (event.payload as SessionInfo)?.state;
         if (st === "OFFLINE" || st === "STOPPED" || st === "DISCONNECTED") {
-          state = { ...state, runningGames: [], stream: null, apps: {} };
+          // Stale install entries would freeze cards at "Downloading 0%".
+          state = { ...state, runningGames: [], stream: null, apps: {}, installProgress: {} };
         }
         emit();
         break;
@@ -269,10 +270,19 @@ function connect() {
       case "game.stopped":
         state = {
           ...state,
-          runningGames: state.runningGames.filter((id) => id !== (event.payload as { id: string }).id),
+          runningGames: state.runningGames.filter((id) => id !== (event.payload as { gameId?: string; id?: string }).gameId && id !== (event.payload as { gameId?: string; id?: string }).id),
         };
         emit();
         break;
+      case "game.start_error": {
+        const p = event.payload as { id?: string; error?: string };
+        if (p?.id) {
+          state = { ...state, runningGames: state.runningGames.filter((id) => id !== p.id) };
+        }
+        notify(`Launch failed: ${p?.error || "unknown error"}`, "error");
+        emit();
+        break;
+      }
       case "apps": {
         const payload = event.payload as Record<string, AppEntry> | AppEntry[] | null;
         let apps: Record<string, AppEntry> = {};
@@ -314,7 +324,7 @@ function connect() {
         break;
       }
       case "game.install.done": {
-        const p = event.payload as { gameId: string; success: boolean; error?: string };
+        const p = event.payload as { gameId: string; success: boolean; error?: string; proton?: boolean };
         const prog = state.installProgress[p.gameId];
         if (prog) {
           state = {
@@ -324,8 +334,23 @@ function connect() {
               [p.gameId]: { ...prog, state: p.success ? "ready" : "error", percent: p.success ? 100 : prog.percent, error: p.error },
             },
           };
+          // Terminal states don't need to linger — drop after a beat so cards
+          // return to their normal Install/Play affordance.
+          const doneId = p.gameId;
+          setTimeout(() => {
+            const cur = state.installProgress[doneId];
+            if (cur && (cur.state === "ready" || cur.state === "error")) {
+              const next = { ...state.installProgress };
+              delete next[doneId];
+              state = { ...state, installProgress: next };
+              emit();
+            }
+          }, 4000);
         }
-        if (p.success) markInstalled(p.gameId);
+        if (p.success) {
+          markInstalled(p.gameId);
+          if (p.proton) notify("Installed Windows version via Proton", "success");
+        }
         emit();
         break;
       }

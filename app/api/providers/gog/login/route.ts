@@ -29,5 +29,11 @@ export async function GET(req: NextRequest) {
     path: "/",
     maxAge: 600,
   });
+  res.cookies.set("oauth_provider", "gog", {
+    httpOnly: true,
+    secure: true,
+    path: "/",
+    maxAge: 600,
+  });
   return res;
 }
