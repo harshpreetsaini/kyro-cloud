@@ -11,15 +11,23 @@ export async function GET(req: NextRequest) {
   }
   const redirectUri = `${origin}/api/providers/epic-gog/callback`;
 
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
     layout: "client2",
-    state: "gog",
+    state,
   });
 
-  return NextResponse.redirect(
+  const res = NextResponse.redirect(
     `https://auth.gog.com/auth?${params.toString()}`
   );
+  res.cookies.set("oauth_state", state, {
+    httpOnly: true,
+    secure: true,
+    path: "/",
+    maxAge: 600,
+  });
+  return res;
 }

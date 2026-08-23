@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { initDb, setProvider } from "@/lib/db.mjs";
+import { verifySession, SESSION_COOKIE } from "@/lib/auth/jwt";
 
-const STORE: Record<string, { steamId: string; name: string; avatar: string; connectedAt: string }> = {};
-
-export function getSteamSession() {
-  return STORE;
+let initialized = false;
+async function ensureInit() {
+  if (!initialized) {
+    await initDb();
+    initialized = true;
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -31,7 +35,6 @@ export async function GET(req: NextRequest) {
     const verifyText = await verifyRes.text();
     verified = verifyText.includes("is_valid:true");
   } catch {
-    // Network error — reject the login
     return NextResponse.redirect(new URL("/providers?error=steam_verification_failed", req.url));
   }
 
@@ -55,15 +58,27 @@ export async function GET(req: NextRequest) {
     if (avatarMatch) avatar = avatarMatch[1];
   } catch {}
 
-  STORE[steamId] = { steamId, name, avatar, connectedAt: new Date().toISOString() };
+  // Persist durably to Vercel Postgres (the backend source of truth) so the
+  // Provider UI shows "Connected" and survives a page refresh / restart.
+  try {
+    await ensureInit();
+    const session = await verifySession(
+      req.cookies.get(SESSION_COOKIE)?.value || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || ""
+    );
+    if (session && session.userId != null) {
+      await setProvider(session.userId, "steam", {
+        username: name,
+        accountId: steamId,
+        linkedAt: Date.now(),
+      });
+    }
+  } catch {}
 
   const response = NextResponse.redirect(new URL("/providers?success=steam", req.url));
-  response.cookies.set("provider_steam", JSON.stringify(STORE[steamId]), {
-      httpOnly: true,
-      secure: true,
-    path: "/",
-    maxAge: 86400 * 30,
-  });
-
+  response.cookies.set(
+    "provider_steam",
+    JSON.stringify({ steamId, name, avatar, connectedAt: new Date().toISOString() }),
+    { httpOnly: true, secure: true, path: "/", maxAge: 86400 * 30 }
+  );
   return response;
 }

@@ -26,16 +26,32 @@ async function relayToBackend(payload: Record<string, unknown>) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
-  const state = (searchParams.get("state") || "epic").toLowerCase();
+  const rawState = searchParams.get("state") || "epic";
+  const stateLower = rawState.toLowerCase();
+  const provider = stateLower === "gog" ? "gog" : "epic";
   const origin = new URL(req.url).origin;
   const redirectUri = `${origin}/api/providers/epic-gog/callback`;
 
+  // Surface any error the provider returned in the redirect (e.g. access_denied,
+  // redirect_uri_mismatch, invalid_client) so the UI shows the real reason
+  // instead of a generic failure.
+  const providerErr = searchParams.get("error");
+  if (providerErr) {
+    return NextResponse.redirect(new URL(`/providers?error=${provider}_${providerErr}`, req.url));
+  }
+
+  // CSRF: the login route stored a random state in the oauth_state cookie.
+  const cookieState = req.cookies.get("oauth_state")?.value;
+  if (cookieState && cookieState !== rawState) {
+    return NextResponse.redirect(new URL(`/providers?error=${provider}_state_mismatch`, req.url));
+  }
+
   if (!code) {
-    return NextResponse.redirect(new URL(`/providers?error=${state}_auth_failed`, req.url));
+    return NextResponse.redirect(new URL(`/providers?error=${provider}_auth_failed`, req.url));
   }
 
   // ── GOG ──────────────────────────────────────────────────────────────
-  if (state === "gog") {
+  if (stateLower === "gog") {
     const clientId = process.env.GOG_CLIENT_ID;
     const clientSecret = process.env.GOG_CLIENT_SECRET || "";
     if (!clientId || !clientSecret) {
