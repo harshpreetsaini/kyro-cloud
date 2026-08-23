@@ -1,14 +1,21 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { GameCard } from "@/components/GameCard";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
 import { api } from "@/lib/config/api";
 import { authHeader } from "@/lib/auth/client";
-import { Button, Skeleton, SkeletonRow } from "@/components/ui";
+import { Button, SkeletonRow } from "@/components/ui";
 import { StarIcon } from "@/components/icons";
 import type { GameEntry } from "@shared/types";
+
+// Each row is its own JS chunk AND fetches only its own slice of the catalog
+// when it scrolls into view — nothing below the fold loads up front.
+const GameRow = dynamic(() => import("./GameRow"), {
+  loading: () => <SkeletonRow />,
+  ssr: false,
+});
 
 // Scroll-reveal wrapper: fades + slides content up as it enters the viewport.
 function Reveal({ children, delay = 0, className = "" }: { children: React.ReactNode; delay?: number; className?: string }) {
@@ -40,94 +47,81 @@ function Reveal({ children, delay = 0, className = "" }: { children: React.React
   );
 }
 
+// Mounts its child only once scrolled near the viewport — the actual chunk
+// (and its API call) never loads for users who don't scroll there.
+function LazySection({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const ob = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting) {
+          setVisible(true);
+          ob.disconnect();
+        }
+      },
+      // Start loading one viewport-height before the row appears.
+      { rootMargin: "100% 0px" }
+    );
+    ob.observe(el);
+    return () => ob.disconnect();
+  }, []);
+  return <div ref={ref}>{visible ? children : <SkeletonRow />}</div>;
+}
+
+const ROWS: { key: string; label: string; href: string; query: string; hint?: string; limit?: number }[] = [
+  { key: "popular", label: "Popular Now", href: "/games", query: "sort=rating", limit: 12 },
+  { key: "installed", label: "Your Library", href: "/library", query: "installed=true", limit: 12 },
+  { key: "free", label: "Free to Play", href: "/games?free=1", query: "free=true", limit: 12 },
+  { key: "linuxFree", label: "Free Steam Games for Linux", href: "/games?free=1&linux=1", query: "free=true&linux=true", hint: "Browse Linux", limit: 12 },
+  { key: "steam", label: "Steam Collection", href: "/games", query: "provider=Steam", limit: 8 },
+];
+
 export default function HomePage() {
   const { launchGame, stopGame, runningGames } = useRuntime();
-  const [games, setGames] = useState<GameEntry[]>([]);
+
+  // Above-the-fold only: six featured titles. Everything else streams in.
+  const [featured, setFeatured] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(api("/api/games"), { headers: { ...authHeader() } })
+    let cancelled = false;
+    fetch(api("/api/games?sort=rating&limit=6"), { headers: { ...authHeader() } })
       .then((r) => r.json())
-      .then((j) => setGames(j.data || []))
-      .catch(() => setGames([]))
-      .finally(() => setLoading(false));
+      .then((j) => {
+        if (!cancelled) setFeatured(j.data || []);
+      })
+      .catch(() => {})
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const recentlyPlayed = games
-    .filter((g) => g.lastPlayedAt)
-    .sort((a, b) => new Date(b.lastPlayedAt!).getTime() - new Date(a.lastPlayedAt!).getTime())
-    .slice(0, 6);
-
-  const popular = [...games].sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 12);
-  const installed = games.filter((g) => g.installed).slice(0, 6);
-  const heroGame = popular[0];
-
-  // Auto-sliding hero of the top featured titles.
-  const featured = popular.slice(0, 6);
+  // Auto-sliding hero.
   const [idx, setIdx] = useState(0);
   useEffect(() => {
     if (featured.length < 2) return;
     const t = setInterval(() => setIdx((i) => (i + 1) % featured.length), 6000);
     return () => clearInterval(t);
   }, [featured.length]);
-  const go = (n: number) => setIdx(((n % featured.length) + featured.length) % featured.length);
+  const go = (n: number) => setIdx(((n % Math.max(featured.length, 1)) + featured.length) % Math.max(featured.length, 1));
   const fg = featured[idx];
 
-  // Free-to-play + Linux-compatible free Steam games.
-  const freeGames = games
-    .filter(
-      (g) =>
-        g.isFree ||
-        g.tags?.some((t) => /free to play/i.test(t)) ||
-        g.description?.toLowerCase().includes("free-to-play")
-    )
-    .slice(0, 12);
-  const linuxFree = games.filter((g) => g.linuxCompatible && g.isFree).slice(0, 12);
-
-  const steamGames = games.filter((g) => g.providers?.some((p) => p.name === "Steam")).slice(0, 8);
-  const epicGames = games.filter((g) => g.providers?.some((p) => p.name === "Epic Games")).slice(0, 8);
-  const gogGames = games.filter((g) => g.providers?.some((p) => p.name === "GOG")).slice(0, 8);
-
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-8">
-        <div className="relative h-[380px] rounded-2xl overflow-hidden bg-secondary/40 animate-pulse" />
-        <SkeletonRow />
-        <SkeletonRow />
-      </div>
-    );
-  }
-
   const genreName = (g: any, i: number) => (g?.name || g || "");
-
-  const renderGameRow = (list: GameEntry[], label: string, href: string, hint = "View All") => (
-    <Reveal>
-      <section className="mb-2">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">{label}</h2>
-          <Link href={href} className="text-sm text-accent hover:underline">
-            {hint}
-          </Link>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-          {list.map((game) => (
-            <GameCard
-              key={game.id}
-              game={game}
-              running={runningGames.includes(game.id)}
-              onLaunch={launchGame}
-              onStop={stopGame}
-            />
-          ))}
-        </div>
-      </section>
-    </Reveal>
-  );
 
   return (
     <div className="flex flex-col gap-8">
       {/* Auto-sliding Hero */}
-      {fg && (
+      {loading ? (
+        <div className="relative h-[380px] rounded-2xl overflow-hidden bg-secondary/40 animate-pulse" />
+      ) : fg ? (
         <section className="relative h-[380px] rounded-2xl overflow-hidden group">
           <div key={fg.id} className="absolute inset-0 animate-fadeIn">
             {fg.heroImage ? (
@@ -206,40 +200,53 @@ export default function HomePage() {
             ))}
           </div>
         </section>
+      ) : (
+        <div className="relative h-[380px] rounded-2xl clay flex items-center justify-center p-8 text-center">
+          <div>
+            <h1 className="font-display text-2xl font-bold mb-2">Welcome to KYRO CLOUD</h1>
+            <p className="text-sm text-muted mb-4">Connect a provider and install your first game to fill this shelf.</p>
+            <Link href="/providers"><Button>Connect Providers</Button></Link>
+          </div>
+        </div>
       )}
 
+      {/* Below the fold: each row is an independent lazy chunk */}
+      {ROWS.map((row) => (
+        <Reveal key={row.key}>
+          <LazySection>
+            <GameRow
+              label={row.label}
+              href={row.href}
+              query={row.query}
+              hint={row.hint}
+              limit={row.limit}
+              runningIds={runningGames}
+              onLaunch={launchGame}
+              onStop={stopGame}
+            />
+          </LazySection>
+        </Reveal>
+      ))}
+
+      {/* Provider CTAs — cheap static rows, no catalog data needed */}
       <Reveal>
-        {recentlyPlayed.length > 0 && (
-          <section className="mb-2">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Continue Playing</h2>
-              <Link href="/library" className="text-sm text-accent hover:underline">
-                View All
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-              {recentlyPlayed.map((game) => (
-                <GameCard key={game.id} game={game} running={runningGames.includes(game.id)} onLaunch={launchGame} onStop={stopGame} />
-              ))}
-            </div>
-          </section>
-        )}
+        <section className="mb-2">
+          <div className="grid sm:grid-cols-2 gap-3">
+            {[
+              { id: "epic", label: "Epic Games", desc: "Connect your Epic account to sync its library.", cta: "Connect Epic" },
+              { id: "gog", label: "GOG", desc: "DRM-free games you own — link your account.", cta: "Connect GOG" },
+            ].map((p) => (
+              <div key={p.id} className="panel p-5 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold">{p.label}</p>
+                  <p className="text-xs text-muted mt-0.5">{p.desc}</p>
+                </div>
+                <Link href="/providers"><Button size="sm" variant="secondary">{p.cta}</Button></Link>
+              </div>
+            ))}
+          </div>
+        </section>
       </Reveal>
-
-      {popular.length > 0 && renderGameRow(popular.slice(0, 12), "Popular Now", "/games")}
-
-      {installed.length > 0 && renderGameRow(installed, "Your Library", "/library")}
-
-      {freeGames.length > 0 && renderGameRow(freeGames, "Free to Play", "/games")}
-
-      {linuxFree.length > 0 &&
-        renderGameRow(linuxFree, "Free Steam Games for Linux", "/games?free=1&linux=1", "Browse Linux")}
-
-      {steamGames.length > 0 && renderGameRow(steamGames, "Steam Collection", "/games")}
-
-      {epicGames.length > 0 && renderGameRow(epicGames, "Epic Games", "/providers", "Connect Epic")}
-
-      {gogGames.length > 0 && renderGameRow(gogGames, "GOG", "/providers", "Connect GOG")}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { GameCard } from "@/components/GameCard";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
@@ -28,16 +28,66 @@ function GamesPage() {
   const [genre, setGenre] = useState<string>("");
   const [genres, setGenres] = useState<string[]>([]);
 
+  // Paged catalog: first slice renders fast; the sentinel appends more.
+  const PAGE_SIZE = 60;
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const loadSlice = useCallback(async (page: number, replace = false) => {
+    const res = await fetch(api(`/api/games?sort=${sort}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}${page === 0 ? "" : "&meta=0"}`), {
+      headers: { ...authHeader() },
+    });
+    const j = await res.json();
+    const slice: GameEntry[] = j.data || [];
+    if (replace) setGenres(j.meta?.genres || []);
+    setTotal(j.meta?.grandTotal ?? (replace ? slice.length : total));
+    setGames((prev) => (replace ? slice : [...prev, ...slice]));
+    return slice.length;
+  }, [sort, total]);
+
   useEffect(() => {
-    fetch(api("/api/games"), { headers: { ...authHeader() } })
-      .then((r) => r.json())
-      .then((j) => {
-        setGames(j.data || []);
-        if (j.meta?.genres) setGenres(j.meta.genres);
-      })
-      .catch(() => setGames([]))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    loadSlice(0, true)
+      .catch(() => {})
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-sort server-side when the sort control changes (reset to first slice).
+  const firstSort = useRef(true);
+  useEffect(() => {
+    if (firstSort.current) {
+      firstSort.current = false;
+      return;
+    }
+    setLoading(true);
+    loadSlice(0, true)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sort]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const ob = new IntersectionObserver(
+      ([e]) => {
+        if (!e.isIntersecting || loadingMore || loading) return;
+        if (games.length >= total && total > 0) return;
+        setLoadingMore(true);
+        loadSlice(Math.floor(games.length / PAGE_SIZE))
+          .catch(() => {})
+          .finally(() => setLoadingMore(false));
+      },
+      { rootMargin: "600px 0px" }
+    );
+    ob.observe(el);
+    return () => ob.disconnect();
+  }, [games.length, total, loadingMore, loading, loadSlice]);
 
   const filteredGames = useMemo(() => {
     let result = games;
@@ -143,6 +193,19 @@ function GamesPage() {
             <GameCard key={g.id} game={g} running={runningGames.includes(g.id)} onLaunch={launchGame} onStop={stopGame} />
           ))}
         </div>
+      )}
+
+      {/* Infinite scroll */}
+      <div ref={sentinelRef} className="h-1" />
+      {loadingMore && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={`m${i}`} />)}
+        </div>
+      )}
+      {!loading && total > 0 && (
+        <p className="text-center text-[11px] text-muted">
+          Showing {games.length} of {total} games
+        </p>
       )}
     </div>
   );

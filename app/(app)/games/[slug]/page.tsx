@@ -203,6 +203,26 @@ export default function GameDetailsPage() {
     });
   };
 
+  const screenshotsToShow = realScreenshots.length > 0 ? realScreenshots : (game?.screenshots?.map((s: any) => s.url) || []);
+  // Lightbox keyboard navigation.
+  useEffect(() => {
+    if (lightbox === null) return;
+    const shots = screenshotsToShow;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "ArrowRight") setLightbox((i) => (i === null ? i : (i + 1) % shots.length));
+      if (e.key === "ArrowLeft") setLightbox((i) => (i === null ? i : (i - 1 + shots.length) % shots.length));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox, screenshotsToShow]);
+
+  const scrollGallery = (dir: 1 | -1) => {
+    const el = galleryRef.current;
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+  };
+
+
   if (loading) {
     return (
       <div className="flex flex-col gap-6">
@@ -252,26 +272,6 @@ export default function GameDetailsPage() {
     { label: "Launch game", status: (launchState === "launching_game" ? "active" : ["connecting","ready"].includes(launchState) ? "done" : "pending") as "pending"|"active"|"done" },
     { label: "Connect stream", status: (launchState === "connecting" ? "active" : launchState === "ready" ? "done" : "pending") as "pending"|"active"|"done" },
   ];
-
-  const screenshotsToShow = realScreenshots.length > 0 ? realScreenshots : (game.screenshots?.map(s => s.url) || []);
-  // Lightbox keyboard navigation.
-  useEffect(() => {
-    if (lightbox === null) return;
-    const shots = screenshotsToShow;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setLightbox(null);
-      if (e.key === "ArrowRight") setLightbox((i) => (i === null ? i : (i + 1) % shots.length));
-      if (e.key === "ArrowLeft") setLightbox((i) => (i === null ? i : (i - 1 + shots.length) % shots.length));
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightbox, screenshotsToShow]);
-
-  const scrollGallery = (dir: 1 | -1) => {
-    const el = galleryRef.current;
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
-  };
-
 
   return (
     <div className="flex flex-col gap-6">

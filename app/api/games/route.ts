@@ -42,14 +42,29 @@ export async function GET(req: NextRequest) {
   // Sort
   if (sort) games = getGamesBySort(sort, games);
 
+  const grandTotal = games.length;
+
+  // Pagination — lets pages stream slices instead of shipping the whole
+  // 250-title catalog at once.
+  const limitNum = parseInt(searchParams.get("limit") || "", 10);
+  const offsetNum = parseInt(searchParams.get("offset") || "0", 10);
+  const paged = Number.isFinite(limitNum) && limitNum > 0;
+  if (paged || offsetNum > 0) {
+    const off = Number.isFinite(offsetNum) && offsetNum > 0 ? offsetNum : 0;
+    games = paged ? games.slice(off, off + limitNum) : games.slice(off);
+  }
+
   return NextResponse.json({
     ok: true,
     data: games,
     meta: {
       total: games.length,
-      genres: getUniqueGenres(),
-      providers: getUniqueProviders(),
-      tags: getUniqueTags(),
+      ...(paged ? { grandTotal } : {}),
+      // Facet lists are only needed by the browse page — home-page row slices
+      // pass meta=0 to keep payloads tiny.
+      ...(searchParams.get("meta") === "0"
+        ? {}
+        : { genres: getUniqueGenres(), providers: getUniqueProviders(), tags: getUniqueTags() }),
     },
   });
 }
