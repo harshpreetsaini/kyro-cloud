@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { initDb, getProfile, saveProfile, setProvider } from "@/lib/db.mjs";
+import { initDb, getProfile, saveProfile, setProvider, getOrCreateOwnerUser } from "@/lib/db.mjs";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/jwt";
 
 const SERVICE_KEY = process.env.BACKEND_SERVICE_KEY || "";
@@ -11,6 +11,23 @@ async function ensureInit() {
     await initDb();
     initialized = true;
   }
+}
+
+// Resolve a userId for the service-key (backend) relay path. The backend may
+// send the string "owner" when no browser session has attributed an
+// activeUserId; in that case we persist under the single owner account so the
+// link is durable and survives backend restarts.
+async function resolveServiceUserId(raw: any): Promise<number | null> {
+  if (raw === "owner" || raw === "me") {
+    try {
+      const owner = await getOrCreateOwnerUser();
+      return owner.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 async function relayToBackend(record: any) {
@@ -44,7 +61,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (isService) {
-    const userId = body.userId != null ? Number(body.userId) : null;
+    const userId = await resolveServiceUserId(body.userId);
     if (userId == null) return NextResponse.json({ ok: false, error: "Missing userId" }, { status: 400 });
     const record = {
       username: body.username || "",
@@ -86,7 +103,7 @@ export async function GET(req: NextRequest) {
   const serviceKey = req.headers.get("x-service-key") || "";
   const isService = SERVICE_KEY && serviceKey === SERVICE_KEY;
   if (isService) {
-    const userId = Number(req.nextUrl.searchParams.get("userId"));
+    const userId = await resolveServiceUserId(req.nextUrl.searchParams.get("userId"));
     const provider = req.nextUrl.searchParams.get("provider");
     if (!userId || !provider) {
       return NextResponse.json({ ok: false, error: "Missing userId/provider" }, { status: 400 });

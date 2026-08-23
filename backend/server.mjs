@@ -166,7 +166,7 @@ loadLinked();
 async function persistLinkedToVercel(provider, record, userId) {
   const svc = process.env.BACKEND_SERVICE_KEY;
   const base = FRONTEND_URL;
-  if (!svc || !base || userId == null) return;
+  if (!svc || !base) return;
   try {
     await fetch(`${base}/api/provider/link`, {
       method: "POST",
@@ -184,8 +184,8 @@ async function persistLinkedToVercel(provider, record, userId) {
 async function fetchLinkedFromVercel(provider) {
   const svc = process.env.BACKEND_SERVICE_KEY;
   const base = FRONTEND_URL;
-  const userId = getManager().activeUserId;
-  if (!svc || !base || userId == null) return null;
+  const userId = getManager().activeUserId ?? "owner";
+  if (!svc || !base) return null;
   try {
     const r = await fetch(
       `${base}/api/provider/link?provider=${encodeURIComponent(provider)}&userId=${userId}`,
@@ -309,9 +309,12 @@ async function handleApi(req, res, url) {
         if (u && u.userId != null) mgr.activeUserId = u.userId;
       }
       // Persist to Vercel Postgres (durable) unless this call already came from
-      // Vercel (service key), which would create a relay loop.
-      if (!authedByService && mgr.activeUserId != null) {
-        persistLinkedToVercel(provider, record, mgr.activeUserId).catch(() => {});
+      // Vercel (service key), which would create a relay loop. Fall back to the
+      // owner account when no browser WS session has attributed an activeUserId
+      // yet, so links survive backend restarts regardless of client timing.
+      if (!authedByService) {
+        const uid = mgr.activeUserId != null ? mgr.activeUserId : "owner";
+        persistLinkedToVercel(provider, record, uid).catch(() => {});
       }
       mgr.broadcast({
         type: "provider.login.result",
