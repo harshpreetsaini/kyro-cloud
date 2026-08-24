@@ -242,28 +242,63 @@ export default function ProvidersPage() {
     fetchProviders();
   };
 
-  const handleLinkSteam = () => {
-    if (!steamUser || !steamPass || !connected) return;
+  const handleLinkSteam = async () => {
+    if (!steamUser || !steamPass || linking) return;
     setLinking(true);
+    setLoginError(null);
     try {
-      linkProvider("steam", steamUser, steamPass);
-    } catch (e) {
-      console.error("linkProvider failed", e);
-    }
-    // Poll the backend session (source of truth) so the UI flips to "Connected"
-    // as soon as the account is persisted — even if the WS push was missed.
-    pendingAutoSync.current = "steam";
-    let tries = 0;
-    if (linkIvRef.current) clearInterval(linkIvRef.current);
-    linkIvRef.current = setInterval(() => {
-      tries += 1;
-      fetchProviders();
-      if (tries >= 12) {
-        if (linkIvRef.current) clearInterval(linkIvRef.current);
-        linkIvRef.current = null;
+      // 1) Persist the connection to the KYRO backend FIRST. This works with
+      //    or without the cloud PC — the account is durable from this moment.
+      const res = await fetch("/api/provider/link", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ provider: "steam", username: steamUser, password: steamPass }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok || !j?.ok) {
+        setLoginError(j?.error || "Could not save the Steam connection.");
         setLinking(false);
+        return;
       }
-    }, 2000);
+      // 2) If the runtime is attached, run the interactive steamcmd login now
+      //    (this triggers Valve's verification email). Otherwise it runs
+      //    automatically the next time the Cloud PC boots.
+      if (connected) linkProvider("steam", steamUser, steamPass);
+      setLoginSuccess(
+        connected
+          ? "Steam account saved — enter the verification code if prompted."
+          : "Steam account saved — it will be verified automatically when your Cloud PC starts."
+      );
+      setTimeout(() => setLoginSuccess(null), 6000);
+      setShowSteamForm(false);
+      setSteamUser("");
+      setSteamPass("");
+      // 3) Poll the backend session (source of truth) so the card flips to
+      //    "Connected" immediately — even if the WS push was missed.
+      pendingAutoSync.current = "steam";
+      let tries = 0;
+      if (linkIvRef.current) clearInterval(linkIvRef.current);
+      linkIvRef.current = setInterval(() => {
+        tries += 1;
+        fetchProviders();
+        if (tries >= 12) {
+          if (linkIvRef.current) clearInterval(linkIvRef.current);
+          linkIvRef.current = null;
+          setLinking(false);
+        }
+      }, 2000);
+    } catch {
+      setLoginError("Network error — could not save the Steam connection.");
+      setLinking(false);
+    }
+  };
+
+  // Epic uses device/account linking as THE connect flow (no OAuth redirect):
+  // open the panel and immediately request a login link from the runtime.
+  const openEpicDeviceLink = () => {
+    setDlError(null);
+    setShowDeviceLink(true);
+    if (!dlUrl && !dlBusy) deviceLinkStart();
   };
 
   if (loading) {
@@ -289,7 +324,9 @@ export default function ProvidersPage() {
       {!connected && (
         <div className="panel p-4 border border-warning/20 bg-warning/5 flex items-center gap-2">
           <WarningIcon className="w-4 h-4 text-warning shrink-0" />
-          <p className="text-sm text-warning">Runtime offline — connect your cloud PC first to sync libraries</p>
+          <p className="text-sm text-warning">
+            Runtime offline — you can still connect accounts. Libraries sync, verification and installs run once it starts.
+          </p>
         </div>
       )}
 
@@ -319,7 +356,55 @@ export default function ProvidersPage() {
                   <h3 className="font-semibold">{provider.name}</h3>
                   {provider.loggedIn ? (
                     <Badge tone="success">{CONNECTED_LABEL[provider.id] || "Connected"}</Badge>
-                  ) : provider.method === "coming" ? (
+            ) : provider.id === "epic" ? (
+              // Epic uses device/account linking — never the OAuth redirect.
+              <div className="flex flex-col gap-2">
+                <Button size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={openEpicDeviceLink} disabled={dlBusy}>
+                  <ConnectIcon className="w-4 h-4" />
+                  {CONNECT_LABEL.epic}
+                </Button>
+                {showDeviceLink && (
+                  <div className="clay-inset rounded-xl p-3 flex flex-col gap-2 text-xs">
+                    {!dlUrl ? (
+                      <>
+                        <p className="text-muted">{dlBusy ? "Opening the Epic device link…" : dlError || "Get a login link from Epic to continue."}</p>
+                        <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
+                          {dlBusy ? "Contacting runtime…" : "1. Get Epic Login Link"}
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-muted">
+                          2. Sign in at the opened tab, then copy the{" "}
+                          <span className="text-accent font-mono">authorizationCode</span> value Epic shows.
+                        </p>
+                        <a href={dlUrl} target="_blank" rel="noopener noreferrer" className="text-accent break-all line-clamp-2">
+                          Reopen login page ↗
+                        </a>
+                        <input
+                          value={dlCode}
+                          onChange={(e) => setDlCode(e.target.value)}
+                          placeholder="Paste authorizationCode here"
+                          className="bg-bg/60 rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-accent font-mono"
+                        />
+                        <div className="flex gap-2">
+                          <Button size="sm" onClick={deviceLinkComplete} disabled={dlBusy || !dlCode.trim()} className="flex-1">
+                            {dlBusy ? "Linking…" : "3. Link Account"}
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
+                            New code
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                    {dlError && <p className="text-danger">{dlError}</p>}
+                  </div>
+                )}
+                {!connected && (
+                  <p className="text-xs text-muted">Your Cloud PC must be running for the device link.</p>
+                )}
+              </div>
+            ) : provider.method === "coming" ? (
                     <Badge tone="neutral">Coming Soon</Badge>
                   ) : (
                     <Badge tone="neutral">Not Connected</Badge>
@@ -369,10 +454,14 @@ export default function ProvidersPage() {
                     onChange={(e) => setSteamPass(e.target.value)}
                     className="bg-secondary rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-accent"
                   />
-                  <Button onClick={handleLinkSteam} disabled={!steamUser || !steamPass || linking || !connected}>
+                  <Button onClick={handleLinkSteam} disabled={!steamUser || !steamPass || linking}>
                     {linking ? "Connecting..." : "Connect Account"}
                   </Button>
-                  {!connected && <p className="text-xs text-danger">Connect your cloud PC first before connecting.</p>}
+                  {!connected && (
+                    <p className="text-xs text-muted">
+                      Cloud PC is offline — the account is saved now and verified automatically when it starts.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <Button size="sm" className="w-full inline-flex items-center justify-center gap-2" onClick={() => setShowSteamForm(true)}>
@@ -411,50 +500,6 @@ export default function ProvidersPage() {
                   <ConnectIcon className="w-4 h-4" />
                   {CONNECT_LABEL[provider.id] || `Connect ${provider.name} Account`}
                 </Button>
-                {provider.id === "epic" && (
-                  <>
-                    <button
-                      onClick={() => setShowDeviceLink((v) => !v)}
-                      className="text-[11px] text-muted hover:text-accent underline underline-offset-2"
-                    >
-                      No Epic app? Link via device code →
-                    </button>
-                    {showDeviceLink && (
-                      <div className="clay-inset rounded-xl p-3 flex flex-col gap-2 text-xs">
-                        {!dlUrl ? (
-                          <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
-                            {dlBusy ? "Contacting runtime…" : "1. Get Epic Login Link"}
-                          </Button>
-                        ) : (
-                          <>
-                            <p className="text-muted">
-                              2. Sign in at the opened tab, then copy the{" "}
-                              <span className="text-accent font-mono">authorizationCode</span> value Epic shows.
-                            </p>
-                            <a href={dlUrl} target="_blank" rel="noopener noreferrer" className="text-accent break-all line-clamp-2">
-                              Reopen login page ↗
-                            </a>
-                            <input
-                              value={dlCode}
-                              onChange={(e) => setDlCode(e.target.value)}
-                              placeholder="Paste authorizationCode here"
-                              className="bg-bg/60 rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-accent font-mono"
-                            />
-                            <div className="flex gap-2">
-                              <Button size="sm" onClick={deviceLinkComplete} disabled={dlBusy || !dlCode.trim()} className="flex-1">
-                                {dlBusy ? "Linking…" : "3. Link Account"}
-                              </Button>
-                              <Button size="sm" variant="secondary" onClick={deviceLinkStart} disabled={dlBusy}>
-                                New code
-                              </Button>
-                            </div>
-                          </>
-                        )}
-                        {dlError && <p className="text-danger">{dlError}</p>}
-                      </div>
-                    )}
-                  </>
-                )}
               </div>
             )}
           </div>

@@ -1068,6 +1068,8 @@ def _provider_linked(ws, p):
     run under that user. Tokens arrive relayed from the frontend callback route."""
     provider = p.get("provider", "")
     payload = p.get("payload", p)
+    if not provider:
+        provider = payload.get("provider", "")
     username = payload.get("username", "")
     access_token = payload.get("accessToken", "")
     refresh_token = payload.get("refreshToken", "")
@@ -1106,14 +1108,44 @@ def _provider_linked(ws, p):
             _report_linked_to_backend("gog", username, account_id=account_id, access_token=access_token, refresh_token=refresh_token)
             send(ws, "provider.login.result", {"provider": "gog", "ok": True, "username": username})
         elif provider == "steam":
-            # Steam linking is performed interactively by the agent itself
-            # (Steam Guard); the backend merely echoes our own POST back here,
-            # so don't emit a conflicting failure result.
-            return
+            # The backend (durable source of truth) relayed saved Steam
+            # credentials — store them locally and confirm the link. Then kick
+            # ONE automatic steamcmd login per boot: Valve emails the Steam
+            # Guard code on this login attempt, so verification happens without
+            # the user re-entering anything.
+            password = payload.get("password", "")
+            if username and password:
+                _save_creds("steam", username, password)
+                send(ws, "provider.login.result", {"provider": "steam", "ok": True, "username": username})
+                _maybe_auto_steam_login(ws)
         else:
             send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": f"Cannot link provider {provider} this way."})
     except Exception as ex:
         send(ws, "provider.login.result", {"provider": provider, "ok": False, "error": str(ex)})
+
+
+_STEAM_AUTOLOGIN = {"attempted": False}
+
+
+def _maybe_auto_steam_login(ws):
+    """One background steamcmd login per agent process using the saved
+    credentials. This is what makes Valve email a Steam Guard code as soon as
+    the Cloud PC boots — no user interaction required."""
+    if _STEAM_AUTOLOGIN["attempted"]:
+        return
+    creds = _load_creds("steam")
+    if not creds or ":" not in creds:
+        return
+    user, pw = creds.split(":", 1)
+    if not user or not pw:
+        return
+    _STEAM_AUTOLOGIN["attempted"] = True
+    print(f"[agent] auto Steam login for {user} — Steam Guard code will be emailed by Valve", flush=True)
+    threading.Thread(
+        target=_provider_login,
+        args=(ws, {"provider": "steam", "username": user, "password": pw}),
+        daemon=True,
+    ).start()
 
 
 # ── Game install ───────────────────────────────────────────────────────

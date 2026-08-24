@@ -288,8 +288,8 @@ async function hydrateLinkedFromVercel(userId) {
     _hydratedUser = String(userId);
     // Replay everything we know to the (freshly attached) agent.
     const m = getManager();
-    for (const rec of Object.values(activeLinked)) {
-      m.sendToAgent({ type: "provider.linked", payload: rec });
+    for (const [prov, rec] of Object.entries(activeLinked)) {
+      m.sendToAgent({ type: "provider.linked", payload: { ...rec, provider: prov } });
     }
     if (merged) console.log(`[provider/link] hydrated ${merged} linked account(s) for user ${userId}`);
   } catch (e) {
@@ -433,7 +433,7 @@ async function handleApi(req, res, url) {
         });
       }
       // Relay to the cloud agent so installs run under this account.
-      mgr.sendToAgent({ type: "provider.linked", payload: record });
+      mgr.sendToAgent({ type: "provider.linked", payload: { ...record, provider } });
       return sendJson(req, res, 200, { ok: true });
     }
     if (method === "GET") {
