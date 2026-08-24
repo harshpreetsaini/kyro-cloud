@@ -12,6 +12,7 @@ import {
   AppWindowIcon, TerminalIcon, GamesIcon, ChevronLeftIcon, ChevronRightIcon, XIcon,
 } from "@/components/icons";
 import { runtimeAction, runtimeRefreshStream, runtimeStore } from "@/lib/runtime/store";
+import { StepRail } from "@/components/CloudStates";
 import { isFavorite, toggleFavorite as toggleFavoriteStore, loadFavorites } from "@/lib/favorites";
 import type { GameEntry, InstallProgress } from "@shared/types";
 
@@ -308,19 +309,25 @@ export default function GameDetailsPage() {
 
       {/* Launch progress */}
       {isLaunching && (
-        <section className="panel p-6">
-          <h3 className="font-semibold text-lg mb-4">Starting {game.name}...</h3>
-          <div className="flex flex-col gap-2.5">
-            {launchSteps.map((step, i) => (
-              <div key={i} className="flex items-center gap-3 text-sm">
-                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 ${
-                  step.status === "done" ? "bg-success text-bg" : step.status === "active" ? "bg-accent text-on-accent animate-pulse-soft" : "bg-secondary text-muted"
-                }`}>
-                  {step.status === "done" ? <CheckIcon className="w-3 h-3" /> : i + 1}
-                </span>
-                <span className={step.status === "pending" ? "text-muted" : "text-text"}>{step.label}</span>
+        <section className="relative overflow-hidden rounded-3xl border border-white/5 shadow-clay animate-scaleIn">
+          <div className="absolute inset-0 bg-gradient-to-b from-[#171935] via-[#10122e] to-[#090b27]" aria-hidden />
+          <div className="absolute inset-0 splash-grid" aria-hidden />
+          <div className="absolute -top-20 -right-16 w-[300px] h-[300px] rounded-full bg-primary-container/15 blur-[100px]" aria-hidden />
+          <div className="relative px-6 py-7">
+            <div className="flex items-center gap-3.5 mb-5">
+              <span className="relative shrink-0">
+                <span className="absolute inset-0 rounded-xl bg-accent/40 splash-halo" aria-hidden />
+                <span className="relative w-9 h-9 rounded-xl bg-accent text-on-accent flex items-center justify-center font-display font-extrabold text-sm">K</span>
+              </span>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-base truncate">Starting {game.name}</h3>
+                <p className="text-xs text-muted mt-0.5">Preparing your cloud machine for launch</p>
               </div>
-            ))}
+            </div>
+            <div className="relative h-1 rounded-full bg-black/40 overflow-hidden clay-inset mb-5 max-w-xs">
+              <div className="absolute inset-y-0 left-0 w-1/4 rounded-full bg-gradient-to-r from-transparent via-accent/70 to-transparent splash-sweep" />
+            </div>
+            <StepRail steps={launchSteps} />
           </div>
         </section>
       )}

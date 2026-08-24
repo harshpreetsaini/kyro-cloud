@@ -259,6 +259,49 @@ async function fetchLinkedFromVercel(provider) {
   }
 }
 
+let _hydratedUser;
+// Hydrate ALL durable linked accounts for a user from Vercel Postgres into
+// the relay cache and replay them to the agent, so installs work without the
+// user re-linking after a backend redeploy, an agent restart, or a new session.
+async function hydrateLinkedFromVercel(userId) {
+  const svc = process.env.BACKEND_SERVICE_KEY;
+  const base = FRONTEND_URL;
+  if (!svc || !base || userId == null) return;
+  try {
+    const r = await fetch(
+      `${base}/api/provider/link?userId=${encodeURIComponent(String(userId))}`,
+      { headers: { "x-service-key": svc }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!r.ok) return;
+    const j = await r.json();
+    const wire = j?.data || {};
+    let merged = 0;
+    for (const [provider, rec] of Object.entries(wire)) {
+      if (!rec || typeof rec !== "object") continue;
+      const cur = activeLinked[provider];
+      if (!cur || Number(rec.linkedAt || 0) >= Number(cur.linkedAt || 0)) {
+        activeLinked[provider] = { ...rec, linkedAt: rec.linkedAt || Date.now() };
+        merged++;
+      }
+    }
+    if (merged) saveLinked();
+    _hydratedUser = String(userId);
+    // Replay everything we know to the (freshly attached) agent.
+    const m = getManager();
+    for (const rec of Object.values(activeLinked)) {
+      m.sendToAgent({ type: "provider.linked", payload: rec });
+    }
+    if (merged) console.log(`[provider/link] hydrated ${merged} linked account(s) for user ${userId}`);
+  } catch (e) {
+    console.error("[provider/link] hydrate failed:", e && e.message ? e.message : e);
+  }
+}
+// Called by the ws layer when a browser session attributes the runtime to a user.
+globalThis.__onActiveUser = (userId) => {
+  if (userId == null || String(userId) === _hydratedUser) return;
+  hydrateLinkedFromVercel(userId);
+};
+
 // Minimal multipart/form-data parser (handles text fields + binary files).
 function parseMultipart(buffer, contentType) {
   const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType || "");
@@ -703,7 +746,13 @@ const server = http.createServer((req, res) => {
 });
 
 setupWebSocket(server);
-getManager(); // initialize runtime manager eagerly
+const _mgr = getManager(); // initialize runtime manager eagerly
+// On every agent attach, restore the active user's durable linked accounts so
+// the agent can install under them immediately — no re-link required.
+_mgr.onEvent("agent_attached", () => {
+  const uid = _mgr.activeUserId != null ? _mgr.activeUserId : "owner";
+  hydrateLinkedFromVercel(uid);
+});
 
 server.listen(PORT, () => {
   console.log(`[kyro-cloud-backend] listening on :${PORT} (frontend: ${FRONTEND_URL || "any"})`);

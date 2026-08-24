@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
@@ -43,6 +43,45 @@ function initials(name?: string | null, email?: string | null) {
   return base.slice(0, 2).toUpperCase();
 }
 
+// Preset profile frames — pure CSS gradients, no assets needed.
+const FRAMES: { id: string; label: string; cls: string }[] = [
+  { id: "none", label: "None", cls: "" },
+  { id: "ember", label: "Ember", cls: "bg-gradient-to-br from-orange-400 via-red-500 to-rose-600" },
+  { id: "aurora", label: "Aurora", cls: "bg-gradient-to-br from-emerald-400 via-teal-500 to-cyan-500" },
+  { id: "royal", label: "Royal", cls: "bg-gradient-to-br from-violet-400 via-purple-500 to-fuchsia-600" },
+  { id: "neon", label: "Neon", cls: "bg-gradient-to-br from-pink-500 via-fuchsia-500 to-indigo-500" },
+  { id: "frost", label: "Frost", cls: "bg-gradient-to-br from-sky-300 via-blue-400 to-indigo-500" },
+];
+
+// Downscale any picked image to a centered 256px JPEG data URL (small enough
+// to live inside the profile's settings JSONB).
+function fileToAvatarDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = c.height = 256;
+        const ctx = c.getContext("2d");
+        if (!ctx) throw new Error("canvas unavailable");
+        const s = Math.min(img.width, img.height);
+        ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 256, 256);
+        resolve(c.toDataURL("image/jpeg", 0.85));
+      } catch (e) {
+        reject(e);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read image"));
+    };
+    img.src = url;
+  });
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const { launchGame, stopGame, runningGames, installedGames } = useRuntime();
@@ -51,6 +90,8 @@ export default function ProfilePage() {
   const [games, setGames] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [savingAppearance, setSavingAppearance] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -102,6 +143,39 @@ export default function ProfilePage() {
     router.push("/login");
   }
 
+  const customAvatar: string | null = profile?.settings?.avatar || null;
+  const frameId: string = profile?.settings?.avatarFrame || "none";
+  const frameCls = FRAMES.find((f) => f.id === frameId)?.cls || "";
+
+  async function saveAppearance(patch: Record<string, unknown>) {
+    setSavingAppearance(true);
+    try {
+      const nextSettings = { ...(profile?.settings || {}), ...patch };
+      setProfile((p) => (p ? { ...p, settings: nextSettings } : p));
+      const res = await fetch("/api/user/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: JSON.stringify({ settings: nextSettings }),
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => null);
+        if (j?.ok && j.data) setProfile((p) => (p ? { ...p, ...j.data } : p));
+      }
+    } finally {
+      setSavingAppearance(false);
+    }
+  }
+
+  async function onAvatarPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    try {
+      const dataUrl = await fileToAvatarDataUrl(f);
+      await saveAppearance({ avatar: dataUrl });
+    } catch {}
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-5">
@@ -116,19 +190,23 @@ export default function ProfilePage() {
   }
 
   const displayName = user?.name || user?.email || "Owner";
-  const avatar = user?.avatar;
+  const avatar = customAvatar || user?.avatar;
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">
       {/* Header */}
       <Card className="flex flex-col sm:flex-row items-center gap-4 sm:gap-5 p-5">
-        <div className="w-20 h-20 rounded-full bg-secondary flex items-center justify-center overflow-hidden shrink-0 ring-1 ring-white/10">
-          {avatar ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={avatar} alt={displayName} className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-2xl font-bold text-accent">{initials(user?.name, user?.email)}</span>
-          )}
+        <div
+          className={`w-[88px] h-[88px] rounded-full p-[3px] shrink-0 ${frameCls || "bg-white/10"}`}
+        >
+          <div className="w-full h-full rounded-full bg-secondary flex items-center justify-center overflow-hidden ring-1 ring-black/20">
+            {avatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={avatar} alt={displayName} className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-2xl font-bold text-accent">{initials(user?.name, user?.email)}</span>
+            )}
+          </div>
         </div>
         <div className="flex-1 text-center sm:text-left min-w-0">
           <h2 className="text-xl font-semibold truncate">{displayName}</h2>
@@ -145,6 +223,43 @@ export default function ProfilePage() {
           {loggingOut ? "Signing out…" : "Sign out"}
         </Button>
       </Card>
+
+      {/* Avatar & frame customization */}
+      <section className="flex flex-col gap-3">
+        <SectionTitle hint={savingAppearance ? <span className="text-xs text-muted">Saving…</span> : undefined}>
+          Customize Profile
+        </SectionTitle>
+        <Card className="p-4 flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()}>
+              Upload Avatar
+            </Button>
+            {customAvatar && (
+              <Button variant="ghost" size="sm" onClick={() => saveAppearance({ avatar: null })}>
+                Remove
+              </Button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={onAvatarPicked} />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-muted w-full sm:w-auto">Profile Frame</span>
+            {FRAMES.map((f) => (
+              <button
+                key={f.id}
+                title={f.label}
+                aria-label={`Frame: ${f.label}`}
+                onClick={() => saveAppearance({ avatarFrame: f.id })}
+                disabled={savingAppearance}
+                className={`w-9 h-9 rounded-full p-[2.5px] transition-transform hover:scale-105 ${
+                  f.cls || "bg-white/10"
+                } ${frameId === f.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface scale-105" : ""}`}
+              >
+                <span className="block w-full h-full rounded-full bg-secondary" />
+              </button>
+            ))}
+          </div>
+        </Card>
+      </section>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">

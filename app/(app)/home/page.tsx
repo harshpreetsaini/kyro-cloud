@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRuntime } from "@/components/providers/RuntimeProvider";
@@ -87,15 +87,15 @@ export default function HomePage() {
   const { launchGame, stopGame, runningGames } = useRuntime();
 
   // Above-the-fold only: six featured titles. Everything else streams in.
-  const [featured, setFeatured] = useState<GameEntry[]>([]);
+  const [pool, setPool] = useState<GameEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(api("/api/games?sort=rating&limit=6"), { headers: { ...authHeader() } })
+    fetch(api("/api/games?sort=rating&limit=24"), { headers: { ...authHeader() } })
       .then((r) => r.json())
       .then((j) => {
-        if (!cancelled) setFeatured(j.data || []);
+        if (!cancelled) setPool(j.data || []);
       })
       .catch(() => {})
       .finally(() => !cancelled && setLoading(false));
@@ -103,6 +103,17 @@ export default function HomePage() {
       cancelled = true;
     };
   }, []);
+
+  // Daily rotation: the six showcased games shift through the top-rated pool
+  // each day, so the page doesn't look identical every visit.
+  const featured = useMemo(() => {
+    if (pool.length <= 6) return pool;
+    const doy = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+    const start = (doy * 6) % pool.length;
+    const out: GameEntry[] = [];
+    for (let i = 0; i < 6; i++) out.push(pool[(start + i) % pool.length]);
+    return out;
+  }, [pool]);
 
   // Auto-sliding hero.
   const [idx, setIdx] = useState(0);

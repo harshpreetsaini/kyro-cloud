@@ -279,7 +279,8 @@ def launch_game(payload: dict) -> dict:
                f"STEAM_COMPAT_DATA_PATH={prefix}",
                f"WINEPREFIX={prefix}",
                f"GAMEID=umu-{app_id}",
-               "UMU_NO_RUNTIME=" ,
+               "UMU_NO_RUNTIME=1",
+               "HOME=/home/gamer",
                umu, exe] + args
     else:
         cmd = ["runuser", "-u", "gamer", "--", "env", f"DISPLAY={DISPLAY}", exe] + args

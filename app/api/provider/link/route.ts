@@ -168,11 +168,21 @@ export async function GET(req: NextRequest) {
   if (isService) {
     const userId = await resolveServiceUserId(req.nextUrl.searchParams.get("userId"));
     const provider = req.nextUrl.searchParams.get("provider");
-    if (!userId || !provider) {
-      return NextResponse.json({ ok: false, error: "Missing userId/provider" }, { status: 400 });
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: "Missing userId" }, { status: 400 });
     }
     const profile = await getProfile(userId);
-    const rec = (profile.providers || {})[provider];
+    const providers = profile.providers || {};
+    // All-providers mode: the backend hydrates its relay cache from here on
+    // every agent attach, so links survive backend restarts without re-linking.
+    if (!provider) {
+      const wire: Record<string, any> = {};
+      for (const [k, rec] of Object.entries(providers)) {
+        if (rec) wire[k] = toWire({ ...(rec as any) });
+      }
+      return NextResponse.json({ ok: true, data: wire });
+    }
+    const rec = providers[provider];
     // Decrypt back to the wire form the agent needs (service path only).
     return NextResponse.json({ ok: true, data: rec ? toWire({ ...rec }) : null });
   }

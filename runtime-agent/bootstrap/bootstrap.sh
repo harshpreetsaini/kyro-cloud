@@ -203,43 +203,85 @@ WRAP
 fi
 
 # ── Proton (Windows games) via umu-launcher ────────────────────────────
-# umu-run runs any game executable under a current Proton build with a
-# per-game WINEPREFIX — no Steam client required. DXVK prerequisites
-# (Vulkan loader + ICDs, i386 multilib for steamcmd) are installed above.
+# umu-launcher is NOT on PyPI and ships no jammy .deb — the zipapp release is
+# the only distro-independent artifact: a python zipapp invoked as
+# `python3 umu-run`. bubblewrap covers the case where the pressure-vessel
+# runtime is used instead of UMU_NO_RUNTIME.
 echo "[bootstrap] installing umu-launcher (Proton support)..." >> /tmp/luna-agent.log
-if ! command -v umu-run >/dev/null 2>&1; then
-  # Preferred: pip wheel (ships the umu-run entrypoint).
-  python3 -m pip install --quiet --break-system-packages umu-launcher 2>/dev/null \
-    || pip3 install --quiet --break-system-packages umu-launcher 2>/dev/null \
-    || pip3 install --quiet umu-launcher 2>/dev/null || true
+if [ ! -x /usr/local/bin/umu-run ] && [ ! -x /opt/umu/bin/umu-run ]; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y bubblewrap >/dev/null 2>&1 || true
+
+  # Resolve the latest release tag WITHOUT the GitHub API (shared Colab egress
+  # IPs are routinely API-rate-limited): following the /releases/latest redirect
+  # lands on .../tag/<VERSION> which we parse from the effective URL.
+  UMU_TAG="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    https://github.com/Open-Wine-Components/umu-launcher/releases/latest 2>/dev/null \
+    | sed 's#.*/tag/##; s#/.*##')"
+  # Fallback chain if even that fails, then asset-name variants per tag.
+  [ -z "$UMU_TAG" ] && UMU_TAG="$(curl -fsSL https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"\(v\{0,1\}[^"]*\)"$/\1/')"
+  [ -z "$UMU_TAG" ] && UMU_TAG="1.4.4"
+  echo "[bootstrap] umu-launcher tag: $UMU_TAG" >> /tmp/luna-agent.log
+
+  rm -rf /opt/umu /tmp/umu.zipapp
+  mkdir -p /opt/umu /tmp/umu.zipapp
+  UMU_OK=0
+  for TAG in "$UMU_TAG" "v${UMU_TAG#v}"; do
+    for ASSET in "umu-launcher-${TAG#v}-zipapp.tar" "umu-launcher-${TAG}-zipapp.tar"; do
+      URL="https://github.com/Open-Wine-Components/umu-launcher/releases/download/${TAG}/${ASSET}"
+      echo "[bootstrap] trying umu zipapp: $URL" >> /tmp/luna-agent.log
+      rm -rf /tmp/umu.zipapp/* 2>/dev/null
+      if curl -fsSL "$URL" -o /tmp/umu.zipapp/umu.tar 2>>/tmp/luna-agent.log && [ -s /tmp/umu.zipapp/umu.tar ]; then
+        tar -xf /tmp/umu.zipapp/umu.tar -C /tmp/umu.zipapp 2>>/tmp/luna-agent.log || true
+        # The zipapp entrypoint may be a regular file or symlink in any dir.
+        INNER="$(find /tmp/umu.zipapp \( -type f -o -type l \) -name 'umu-run' | head -1)"
+        if [ -n "$INNER" ]; then
+          mkdir -p /opt/umu/bin
+          install -m 0755 "$(readlink -f "$INNER")" /opt/umu/bin/umu-run
+          cat > /usr/local/bin/umu-run <<'UMUWRAP'
+#!/usr/bin/env bash
+# umu-launcher zipapp shim — runs the bundled zipapp entrypoint.
+exec python3 /opt/umu/bin/umu-run "$@"
+UMUWRAP
+          chmod +x /usr/local/bin/umu-run
+          echo "[bootstrap] umu-run shim installed (zipapp ${TAG})" >> /tmp/luna-agent.log
+          UMU_OK=1
+          break 2
+        fi
+      fi
+    done
+  done
+  rm -rf /tmp/umu.zipapp
+  [ "$UMU_OK" = "0" ] && echo "[bootstrap] [WARN] all umu zipapp downloads failed for tag ${UMU_TAG}" >> /tmp/luna-agent.log
 fi
-if ! command -v umu-run >/dev/null 2>&1; then
-  # Fallback: official release tarball to /usr/local/bin.
-  UMU_VER="$(curl -fsSL https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)"$/\1/')"
-  [ -z "$UMU_VER" ] && UMU_VER="1.1.4"
-  curl -fsSL "https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VER}/umu-launcher-${UMU_VER}-ubuntu-22.04.tar.gz" -o /tmp/umu.tgz 2>/dev/null || true
-  if [ -s /tmp/umu.tgz ]; then
-    tar -xzf /tmp/umu.tgz -C /tmp 2>/dev/null || true
-    find /tmp -maxdepth 3 -type f -name umu-run -exec install -m 0755 {} /usr/local/bin/umu-run \; 2>/dev/null || true
-    rm -f /tmp/umu.tgz
+
+# umu downloads UMU-Proton into the gamer HOME on first run — make sure it
+# exists and is writable before any Windows-title launch.
+mkdir -p /home/gamer/.local/share/Steam /home/gamer/games
+chown -R gamer:gamer /home/gamer/.local /home/gamer/games 2>/dev/null || true
+
+# Runtime verification: the shim must actually execute under this Python,
+# not merely exist on disk.
+if [ -x /usr/local/bin/umu-run ]; then
+  if UMU_VERSION_CHECK="$(python3 /opt/umu/bin/umu-run --version 2>&1)"; then
+    echo "[bootstrap] umu-run verified: ${UMU_VERSION_CHECK}" >> /tmp/luna-agent.log
+  else
+    echo "[bootstrap] [WARN] umu-run shim present but failed to run: ${UMU_VERSION_CHECK}" >> /tmp/luna-agent.log
   fi
-fi
-mkdir -p /home/gamer/games
-chown -R gamer:gamer /home/gamer/games 2>/dev/null || true
-if command -v umu-run >/dev/null 2>&1; then
-  echo "[bootstrap] umu-run OK: $(command -v umu-run)" >> /tmp/luna-agent.log
-else
-  echo "[bootstrap] [WARN] umu-run unavailable — Windows titles will fail to launch" >> /tmp/luna-agent.log
 fi
 
 echo "[bootstrap] verifying components:" >> /tmp/luna-agent.log
-for b in Xvfb x11vnc openbox steamcmd gst-launch-1.0 umu-run; do
+for b in Xvfb x11vnc openbox steamcmd gst-launch-1.0; do
   if command -v "$b" >/dev/null 2>&1; then
     echo "  [OK]   $b" >> /tmp/luna-agent.log
   else
     echo "  [MISS] $b" >> /tmp/luna-agent.log
   fi
 done
+if [ -x /usr/local/bin/umu-run ] || command -v umu-run >/dev/null 2>&1; then
+  echo "  [OK]   umu-run" >> /tmp/luna-agent.log
+else
+  echo "  [MISS] umu-run" >> /tmp/luna-agent.log
+fi
 
 echo "[bootstrap] starting agent (backend: ${LUNA_BACKEND_WS})..." >> /tmp/luna-agent.log
 cd "$AGENT_DIR/agent"
