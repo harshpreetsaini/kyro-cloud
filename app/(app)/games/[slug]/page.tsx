@@ -196,10 +196,11 @@ export default function GameDetailsPage() {
   };
 
   const waitForGameRunning = (gameId: string, timeoutMs: number): Promise<void> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const start = Date.now();
       const iv = setInterval(() => {
-        if (Date.now() - start > timeoutMs || runtimeStore.getSnapshot().runningGames.includes(gameId)) { clearInterval(iv); resolve(); }
+        if (runtimeStore.getSnapshot().runningGames.includes(gameId)) { clearInterval(iv); resolve(); return; }
+        if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("Timed out waiting for the game to start")); }
       }, 500);
     });
   };

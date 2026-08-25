@@ -898,86 +898,93 @@ def _provider_login(ws, p):
                         cmd,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
-                    authed = False
-                    guard_attempts = 0
-                    MAX_GUARD = 3
-                    requesting = False
-                    for line in proc.stdout:
-                        lo = line.lower()
-                        # Success markers: steamcmd prints 'Logged in OK' /
-                        # 'Waiting for user info... OK' after a completed login.
-                        if (
-                            "logged in ok" in lo
-                            or "waiting for user info" in lo
-                            or "steam account successfully logged in" in lo
-                        ):
-                            ok = True
-                            authed = True
-                            requesting = False
-                            _mark_steam_session_ok()
-                            # Pull the owned-apps list while we're authenticated.
-                            try:
-                                proc.stdin.write("+apps_list\n")
+                    # steamcmd can sit silently on an interactive prompt with no
+                    # output lines — enforce a hard login deadline.
+                    _login_timer = threading.Timer(300, lambda: _kill_proc_group(proc))
+                    _login_timer.daemon = True
+                    _login_timer.start()
+                    try:
+                        authed = False
+                        guard_attempts = 0
+                        MAX_GUARD = 3
+                        requesting = False
+                        for line in proc.stdout:
+                            lo = line.lower()
+                            # Success markers: steamcmd prints 'Logged in OK' /
+                            # 'Waiting for user info... OK' after a completed login.
+                            if (
+                                "logged in ok" in lo
+                                or "waiting for user info" in lo
+                                or "steam account successfully logged in" in lo
+                            ):
+                                ok = True
+                                authed = True
+                                requesting = False
+                                _mark_steam_session_ok()
+                                # Pull the owned-apps list while we're authenticated.
+                                try:
+                                    proc.stdin.write("+apps_list\n")
+                                    proc.stdin.flush()
+                                except Exception:
+                                    pass
+                                continue
+                            # Passwordless attempt hit a dead session: steamcmd asks
+                            # for the password interactively and would hang forever.
+                            if not with_password and (
+                                "invalid password" in lo
+                                or "failed to login" in lo
+                                or lo.rstrip().endswith("password:")
+                            ):
+                                err = "cached session expired"
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                                return ok, err, owned
+                            # Only handle a guard prompt before we're authenticated; once
+                            # logged in, ignore any trailing guard-related log lines.
+                            if not authed and _is_steam_guard_prompt(lo):
+                                # The guard prompt spans several log lines; only request a
+                                # code once per prompt cycle (not once per matching line).
+                                if requesting:
+                                    continue
+                                requesting = True
+                                guard_attempts += 1
+                                if guard_attempts > MAX_GUARD:
+                                    err = "Steam Guard code was rejected too many times. Check the code/email and try again."
+                                    break
+                                code = _request_steam_guard(f"login-{username}")
+                                if code and proc.stdin:
+                                    try:
+                                        proc.stdin.write(code + "\n")
+                                        proc.stdin.flush()
+                                    except Exception:
+                                        pass
+                                continue
+                            # A fresh login attempt or a rejection lets the next guard
+                            # prompt request a code again (one attempt per cycle).
+                            if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
+                                requesting = False
+                            # steamcmd apps_list output: "<appid>\t<name>"
+                            s = line.strip()
+                            if s and s[0].isdigit() and "\t" in s:
+                                owned.append(s.split("\t", 1)[0])
+                        try:
+                            if proc.stdin:
+                                proc.stdin.write("+quit\n")
                                 proc.stdin.flush()
-                            except Exception:
-                                pass
-                            continue
-                        # Passwordless attempt hit a dead session: steamcmd asks
-                        # for the password interactively and would hang forever.
-                        if not with_password and (
-                            "invalid password" in lo
-                            or "failed to login" in lo
-                            or lo.rstrip().endswith("password:")
-                        ):
-                            err = "cached session expired"
+                        except Exception:
+                            pass
+                        try:
+                            proc.wait(timeout=30)
+                        except Exception:
                             try:
                                 proc.kill()
                             except Exception:
                                 pass
-                            return ok, err, owned
-                        lo = line.lower()
-                        # Only handle a guard prompt before we're authenticated; once
-                        # logged in, ignore any trailing guard-related log lines.
-                        if not authed and _is_steam_guard_prompt(lo):
-                            # The guard prompt spans several log lines; only request a
-                            # code once per prompt cycle (not once per matching line).
-                            if requesting:
-                                continue
-                            requesting = True
-                            guard_attempts += 1
-                            if guard_attempts > MAX_GUARD:
-                                err = "Steam Guard code was rejected too many times. Check the code/email and try again."
-                                break
-                            code = _request_steam_guard(f"login-{username}")
-                            if code and proc.stdin:
-                                try:
-                                    proc.stdin.write(code + "\n")
-                                    proc.stdin.flush()
-                                except Exception:
-                                    pass
-                            continue
-                        # A fresh login attempt or a rejection lets the next guard
-                        # prompt request a code again (one attempt per cycle).
-                        if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
-                            requesting = False
-                        # steamcmd apps_list output: "<appid>\t<name>"
-                        s = line.strip()
-                        if s and s[0].isdigit() and "\t" in s:
-                            owned.append(s.split("\t", 1)[0])
-                    try:
-                        if proc.stdin:
-                            proc.stdin.write("+quit\n")
-                            proc.stdin.flush()
-                    except Exception:
-                        pass
-                    try:
-                        proc.wait(timeout=30)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    return ok, err, owned
+                        return ok, err, owned
+                    finally:
+                        _login_timer.cancel()
 
                 # Reuse the cached Steam session when one exists (passwordless
                 # login → no fresh Steam Guard challenge). Only fall back to a
@@ -1125,6 +1132,11 @@ def _provider_logout(ws, p):
                 removed.append(f)
     except Exception:
         pass
+    if provider == "steam":
+        # The cached session belongs to the removed account — without this, the
+        # next link would passwordlessly "+login <new_user>" against a sentry
+        # from the old account and stall at the password prompt.
+        _clear_steam_session_ok()
     print(f"[agent] provider {provider} logged out; cleared: {removed or 'nothing stored'}", flush=True)
     send(ws, "provider.logout.result", {"provider": provider, "ok": True})
 
@@ -1143,8 +1155,10 @@ def _provider_linked(ws, p):
 
     try:
         if provider == "epic":
-            import time
-            # legendary stores its auth at ~/.config/legendary/user.json
+            from datetime import datetime, timezone, timedelta
+            # legendary stores its auth at ~/.config/legendary/user.json and
+            # parses expires_at as an RFC3339 timestamp (Go time.Time) — an
+            # epoch int makes legendary reject the whole file.
             cfg_dir = os.path.expanduser("~/.config/legendary")
             os.makedirs(cfg_dir, exist_ok=True)
             user_json = {
@@ -1153,7 +1167,7 @@ def _provider_linked(ws, p):
                 "account_id": account_id or username,
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "expires_at": int(time.time()) + 3600,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             }
             with open(os.path.join(cfg_dir, "user.json"), "w") as f:
                 json.dump(user_json, f)
@@ -1268,6 +1282,14 @@ def _game_install(ws, p):
         logf = None
         try:
             with _install_lock:
+                existing = _installs.get(game_id)
+                if existing is not None and existing.get("proc") is not None and existing["proc"].poll() is None:
+                    # A download for this game is already live — never let a
+                    # duplicate request overwrite its registry entry (that made
+                    # the original proc uncancellable).
+                    send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "This game is already installing."})
+                    send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Install already running"})
+                    return
                 _installs[game_id] = ctx
             cancel_event = ctx["cancel"]
 
@@ -1353,149 +1375,181 @@ def _game_install(ws, p):
                     proc = subprocess.Popen(run_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
                     ctx["proc"] = proc
                     _agent_pids.append(proc.pid)
-                    for line in proc.stdout:
-                        try:
-                            logf.write(line); logf.flush()
-                        except Exception:
-                            pass
-                        if _cancelled():
-                            _kill_proc_group(proc)
-                            _cleanup_install(game_id)
-                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
-                            return False, False, False, False
-                        if time.time() - started > INSTALL_TIMEOUT_SECONDS:
-                            _log(f"timeout after {INSTALL_TIMEOUT_SECONDS}s\n")
-                            _kill_proc_group(proc)
-                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": f"Install timed out after {INSTALL_TIMEOUT_SECONDS // 60} minutes."})
-                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Install timed out"})
-                            return False, False, False, False
-                        lo = line.lower().strip()
-                        # Stale cached session (passwordless login rejected): steamcmd
-                        # asks for the password or reports invalid credentials. Clear
-                        # the marker so the caller can retry with a full login.
-                        if not reuse_session and ("invalid password" in lo or "password:" in lo or "failed to login" in lo or "login failure" in lo):
-                            _log("cached Steam session rejected — will retry with password\n")
-                            _kill_proc_group(proc)
-                            stale_session = True
-                            break
-                        # License/ownership failure. For free-to-play titles the FIRST
-                        # app_update often fails because the free sub isn't attached
-                        # yet — the caller retries once before treating this as a
-                        # genuine ownership problem.
-                        if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
-                            _log("steamcmd license error (may auto-resolve on retry): " + line)
-                            _kill_proc_group(proc)
-                            license_hit = True
-                            break
-                        # Platform errors trigger the Windows/Proton retry instead of
-                        # failing outright — Windows-only titles are fully supported.
-                        if "invalid platform" in lo or ("platform" in lo and "not available" in lo) or "no linux depot" in lo or ("error!" in lo and "platform" in lo):
-                            _log("steamcmd platform error (will retry windows): " + line)
-                            _kill_proc_group(proc)
-                            platform_hit = True
-                            break
-                        # Steam Guard (2FA) code requested — ask the user and feed it
-                        # back. Only before we're authenticated; once the download
-                        # starts we ignore any trailing guard-related log lines.
-                        if not authed and _is_steam_guard_prompt(lo):
-                            # The guard prompt spans several log lines; only request a
-                            # code once per prompt cycle (not once per matching line).
-                            if requesting:
-                                continue
-                            requesting = True
-                            guard_attempts += 1
-                            if guard_attempts > MAX_GUARD:
-                                send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
-                                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
+                    # Hard deadline: the per-line timeout check below only runs
+                    # while lines are arriving — a silently hung steamcmd (e.g.
+                    # waiting on an interactive password prompt) must still die.
+                    _kill_timer = threading.Timer(INSTALL_TIMEOUT_SECONDS, lambda: _kill_proc_group(proc))
+                    _kill_timer.daemon = True
+                    _kill_timer.start()
+                    try:
+                        for line in proc.stdout:
+                            try:
+                                logf.write(line); logf.flush()
+                            except Exception:
+                                pass
+                            if _cancelled():
                                 _kill_proc_group(proc)
                                 _cleanup_install(game_id)
+                                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                                 return False, False, False, False
-                            guard_code = _request_steam_guard(f"install-{game_id}")
-                            if guard_code and proc.stdin:
+                            if time.time() - started > INSTALL_TIMEOUT_SECONDS:
+                                _log(f"timeout after {INSTALL_TIMEOUT_SECONDS}s\n")
+                                _kill_proc_group(proc)
+                                send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": f"Install timed out after {INSTALL_TIMEOUT_SECONDS // 60} minutes."})
+                                send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Install timed out"})
+                                return False, False, False, False
+                            lo = line.lower().strip()
+                            # Login failure / interactive password prompt: either
+                            # the cached session is dead or the password is wrong.
+                            # Either way stop this attempt; phase 3 retries with a
+                            # full login when appropriate.
+                            if not authed and ("invalid password" in lo or "password:" in lo or "failed to login" in lo or "login failure" in lo):
+                                _log("steamcmd login rejected/prompted — will retry with full credentials\n")
+                                _kill_proc_group(proc)
+                                stale_session = True
+                                break
+                            # License/ownership failure. For free-to-play titles the FIRST
+                            # app_update often fails because the free sub isn't attached
+                            # yet — the caller retries once before treating this as a
+                            # genuine ownership problem.
+                            if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
+                                _log("steamcmd license error (may auto-resolve on retry): " + line)
+                                _kill_proc_group(proc)
+                                license_hit = True
+                                break
+                            # Platform errors trigger the Windows/Proton retry instead of
+                            # failing outright — Windows-only titles are fully supported.
+                            if "invalid platform" in lo or ("platform" in lo and "not available" in lo) or "no linux depot" in lo or ("error!" in lo and "platform" in lo):
+                                _log("steamcmd platform error (will retry windows): " + line)
+                                _kill_proc_group(proc)
+                                platform_hit = True
+                                break
+                            # Steam Guard (2FA) code requested — ask the user and feed it
+                            # back. Only before we're authenticated; once the download
+                            # starts we ignore any trailing guard-related log lines.
+                            if not authed and _is_steam_guard_prompt(lo):
+                                # The guard prompt spans several log lines; only request a
+                                # code once per prompt cycle (not once per matching line).
+                                if requesting:
+                                    continue
+                                requesting = True
+                                guard_attempts += 1
+                                if guard_attempts > MAX_GUARD:
+                                    send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam Guard code rejected too many times. Check the code and try again."})
+                                    send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
+                                    _kill_proc_group(proc)
+                                    _cleanup_install(game_id)
+                                    return False, False, False, False
+                                guard_code = _request_steam_guard(f"install-{game_id}")
+                                if guard_code and proc.stdin:
+                                    try:
+                                        proc.stdin.write(guard_code + "\n")
+                                        proc.stdin.flush()
+                                    except Exception:
+                                        pass
+                                continue
+                            # A fresh login attempt or a rejection lets the next guard
+                            # prompt request a code again (one attempt per cycle).
+                            if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
+                                requesting = False
+                            dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
+                            if dl_match:
+                                downloaded = int(dl_match.group(1).replace(',', ''))
+                                percent = float(dl_match.group(2))
+                                _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                                continue
+                            # steamcmd self-update progress: "[  7%] Downloading update (...)"
+                            boot_match = re.search(r'\[\s*(\d+)%\]\s*downloading update', lo)
+                            if boot_match:
+                                percent = float(boot_match.group(1))
+                                _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                                continue
+                            # steamcmd game-download line: "Update state (0x61) downloading,
+                            # progress: 2.26 (2059360684 / 91106400180)" — percent then bytes.
+                            prog_match = re.search(r'progress:\s*([\d.]+)\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                            if prog_match:
+                                percent = float(prog_match.group(1))
+                                downloaded = int(prog_match.group(2).replace(',', ''))
+                                total_bytes = int(prog_match.group(3).replace(',', ''))
+                                _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                                continue
+                            prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
+                            if prog_match:
+                                percent = float(prog_match.group(1))
+                                downloaded = int(prog_match.group(2).replace(',', ''))
+                                total_bytes = int(prog_match.group(3).replace(',', ''))
+                                _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
+                                continue
+                            prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
+                            if prog_match:
+                                percent = float(prog_match.group(1))
+                                _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                                continue
+                            spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
+                            if spd_match:
+                                val = float(spd_match.group(1))
+                                unit = spd_match.group(2)
+                                speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
+                                continue
+                            size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
+                            if size_match:
+                                total_bytes = int(size_match.group(1).replace(',', ''))
+                                continue
+                            if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
+                                authed = True
+                                requesting = False
+                                # A download starting means this login succeeded — cache
+                                # the session so future installs skip the password (and
+                                # any new Steam Guard challenge) entirely.
+                                _mark_steam_session_ok()
+                                percent = min(percent + 2, 95)
+                                _send_progress("downloading", percent, 0, total_bytes, speed_bps)
+                        try:
+                            proc.wait(timeout=60)
+                        except Exception:
+                            _kill_proc_group(proc)
+                        # steamcmd sometimes prints "Error! App 'X' state is 0x602 after
+                        # update job" yet still writes a complete appmanifest. Treat the
+                        # install as successful if the manifest exists or success markers
+                        # are present, rather than trusting the (often non-zero) exit
+                        # code. Manifests live under steamapps/ inside the install dir.
+                        def _manifest_complete():
+                            # steamcmd creates the appmanifest when an update job
+                            # STARTS — existence alone proves nothing. Require
+                            # StateFlags 4 (fully installed).
+                            for cand in (
+                                os.path.join(install_dir, "steamapps", f"appmanifest_{app_id}.acf"),
+                                os.path.join(install_dir, f"appmanifest_{app_id}.acf"),
+                            ):
+                                if not os.path.exists(cand):
+                                    continue
                                 try:
-                                    proc.stdin.write(guard_code + "\n")
-                                    proc.stdin.flush()
+                                    with open(cand) as mf:
+                                        content = mf.read().lower().replace(" ", "")
+                                    if '"stateflags""4"' in content:
+                                        return True
                                 except Exception:
-                                    pass
-                            continue
-                        # A fresh login attempt or a rejection lets the next guard
-                        # prompt request a code again (one attempt per cycle).
-                        if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
-                            requesting = False
-                        dl_match = re.search(r'downloaded\s+([\d,]+)\s+bytes?\s*\((\d+)%\)', lo)
-                        if dl_match:
-                            downloaded = int(dl_match.group(1).replace(',', ''))
-                            percent = float(dl_match.group(2))
-                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                            continue
-                        # steamcmd self-update progress: "[  7%] Downloading update (...)"
-                        boot_match = re.search(r'\[\s*(\d+)%\]\s*downloading update', lo)
-                        if boot_match:
-                            percent = float(boot_match.group(1))
-                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                            continue
-                        # steamcmd game-download line: "Update state (0x61) downloading,
-                        # progress: 2.26 (2059360684 / 91106400180)" — percent then bytes.
-                        prog_match = re.search(r'progress:\s*([\d.]+)\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
-                        if prog_match:
-                            percent = float(prog_match.group(1))
-                            downloaded = int(prog_match.group(2).replace(',', ''))
-                            total_bytes = int(prog_match.group(3).replace(',', ''))
-                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                            continue
-                        prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%\s*\(([\d,]+)\s*/\s*([\d,]+)\)', lo)
-                        if prog_match:
-                            percent = float(prog_match.group(1))
-                            downloaded = int(prog_match.group(2).replace(',', ''))
-                            total_bytes = int(prog_match.group(3).replace(',', ''))
-                            _send_progress("downloading", percent, downloaded, total_bytes, speed_bps)
-                            continue
-                        prog_match = re.search(r'progress:\s*(\d+(?:\.\d+)?)%', lo)
-                        if prog_match:
-                            percent = float(prog_match.group(1))
-                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                            continue
-                        spd_match = re.search(r'([\d.]+)\s*(kb|mb|gb)/s', lo)
-                        if spd_match:
-                            val = float(spd_match.group(1))
-                            unit = spd_match.group(2)
-                            speed_bps = int(val * (1024**2) if unit == "mb" else val * 1024 if unit == "kb" else val * (1024**3))
-                            continue
-                        size_match = re.search(r'([\d,]+)\s*bytes?\s+to\s+download', lo)
-                        if size_match:
-                            total_bytes = int(size_match.group(1).replace(',', ''))
-                            continue
-                        if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
-                            authed = True
-                            requesting = False
-                            # A download starting means this login succeeded — cache
-                            # the session so future installs skip the password (and
-                            # any new Steam Guard challenge) entirely.
-                            _mark_steam_session_ok()
-                            percent = min(percent + 2, 95)
-                            _send_progress("downloading", percent, 0, total_bytes, speed_bps)
-                    try:
-                        proc.wait(timeout=60)
-                    except Exception:
-                        _kill_proc_group(proc)
-                    # steamcmd sometimes prints "Error! App 'X' state is 0x602 after
-                    # update job" yet still writes a complete appmanifest. Treat the
-                    # install as successful if the manifest exists or success markers
-                    # are present, rather than trusting the (often non-zero) exit
-                    # code. Manifests live under steamapps/ inside the install dir.
-                    manifest_ok = (
-                        os.path.exists(os.path.join(install_dir, "steamapps", f"appmanifest_{app_id}.acf"))
-                        or os.path.exists(os.path.join(install_dir, f"appmanifest_{app_id}.acf"))
-                    )
-                    log_text = ""
-                    try:
-                        with open(log_path) as lf:
-                            log_text = lf.read()
-                    except Exception:
-                        pass
-                    success_markers = ("fully installed", "fully updated", "Success! App")
-                    attempt_ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
-                    return attempt_ok, platform_hit, license_hit, stale_session
+                                    continue
+                            return False
+
+                        manifest_ok = _manifest_complete()
+                        log_text = ""
+                        try:
+                            with open(log_path) as lf:
+                                log_text = lf.read()
+                        except Exception:
+                            pass
+                        success_markers = ("fully installed", "fully updated", "Success! App")
+                        attempt_ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
+                        return attempt_ok, platform_hit, license_hit, stale_session
+                    finally:
+                        _kill_timer.cancel()
+
+                def _requeue_ctx():
+                    """Mid-flight cleanups pop the install from the registry so
+                    cancel would become a no-op for the retry — re-register."""
+                    with _install_lock:
+                        _installs[game_id] = ctx
 
                 _send_progress("downloading", 0)
                 # Phase 1: native Linux depots.
@@ -1507,8 +1561,8 @@ def _game_install(ws, p):
                     _log("retrying with @sSteamCmdForcePlatformType windows\n")
                     _cleanup_install(game_id)
                     os.makedirs(install_dir, exist_ok=True)
-                    with _install_lock:
-                        _installs[game_id]["proton"] = True
+                    ctx["proton"] = True
+                    _requeue_ctx()
                     _send_progress("checking", 1)
                     used_windows = True
                     ok, platform_hit, license_hit, stale_session = _run_steamcmd_attempt(force_windows=True)
@@ -1528,6 +1582,7 @@ def _game_install(ws, p):
                         login_args = ["+login", steam_user, steam_pass]
                     _cleanup_install(game_id)
                     os.makedirs(install_dir, exist_ok=True)
+                    _requeue_ctx()
                     _send_progress("checking", 1)
                     ok, platform_hit, license_hit, stale_session = _run_steamcmd_attempt(force_windows=used_windows)
                     if ok and used_windows:
@@ -1545,6 +1600,7 @@ def _game_install(ws, p):
                     _log(f"free-license acquisition retry for {app_id}\n")
                     _cleanup_install(game_id)
                     os.makedirs(install_dir, exist_ok=True)
+                    _requeue_ctx()
                     _send_progress("checking", 1)
                     time.sleep(3)
                     ok, _, license_hit, _ = _run_steamcmd_attempt(force_windows=used_windows)

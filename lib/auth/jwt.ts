@@ -1,6 +1,12 @@
 import { SignJWT, jwtVerify } from "jose";
 
-const secret = new TextEncoder().encode(process.env.AUTH_SECRET || "change-me-in-production");
+// Fail closed: a missing signing secret must never silently fall back to a
+// public constant (that would let anyone mint valid session JWTs).
+const AUTH_SECRET = process.env.AUTH_SECRET || "";
+if (!AUTH_SECRET && process.env.NODE_ENV === "production") {
+  throw new Error("AUTH_SECRET is not set — refusing to sign/verify sessions with a default secret.");
+}
+const secret = new TextEncoder().encode(AUTH_SECRET || "change-me-in-production");
 
 export async function signSession(user: string, userId: number | null = null): Promise<string> {
   return await new SignJWT({ user, userId })

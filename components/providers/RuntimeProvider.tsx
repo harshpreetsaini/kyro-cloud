@@ -3,7 +3,7 @@
 import { useEffect, ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSyncExternalStore } from "react";
-import { runtimeStore, ensureConnected, runtimeAction, runtimeLaunchGame, runtimeStopGame, runtimeInstallGame, runtimeInstallApp, runtimeUninstallGame, runtimeCancelInstall, runtimeSend, dismiss, runtimeFetchApps, runtimeLaunchApp, runtimeStopApp, runtimeLinkProvider, runtimeSubmitGuard, runtimeCompleteProviderLogin, runtimeDismissLoginRequired, isInstalled, isOwned, AppEntry } from "@/lib/runtime/store";
+import { runtimeStore, ensureConnected, resetRuntime, runtimeAction, runtimeLaunchGame, runtimeStopGame, runtimeInstallGame, runtimeInstallApp, runtimeUninstallGame, runtimeCancelInstall, runtimeSend, dismiss, runtimeFetchApps, runtimeLaunchApp, runtimeStopApp, runtimeLinkProvider, runtimeSubmitGuard, runtimeCompleteProviderLogin, runtimeDismissLoginRequired, isInstalled, isOwned, AppEntry } from "@/lib/runtime/store";
 import { getToken } from "@/lib/auth/client";
 
 export function RuntimeProvider({ children }: { children: ReactNode }) {
@@ -46,6 +46,7 @@ export function useRuntime() {
     submitGuard: runtimeSubmitGuard,
     completeProviderLogin: runtimeCompleteProviderLogin,
     dismissLoginRequired: runtimeDismissLoginRequired,
+    resetRuntime,
     start: () => runtimeAction("start"),
     stop: () => runtimeAction("stop"),
     restart: () => runtimeAction("restart"),

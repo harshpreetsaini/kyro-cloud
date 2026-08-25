@@ -76,8 +76,8 @@ def start_desktop(display: str = DISPLAY) -> bool:
     if DESKTOP_PROC and DESKTOP_PROC.poll() is None:
         return True
 
-    # Always use :1 as the Colab virtual display
-    display = ":1"
+    # Honor the requested display (LUNA_DISPLAY) — hardcoding :1 here made
+    # Xvfb land on a different display than x11vnc/games when overridden.
 
     # Start Xvfb first (virtual framebuffer) if not already running.
     xvfb = os.environ.get("LUNA_XVFB", "Xvfb")
@@ -156,7 +156,9 @@ def start_stream(payload: dict) -> dict:
                  "--fps", str(fps),
                  "--encoder", "nvh264enc" if shutil.which("nvh264enc") else "x264enc",
                  "--enable-audio"],
-                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env,
+                # Undrained PIPEs fill after ~64 KB and freeze the pipeline.
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             STREAM_PROC = _selkies_proc
             time.sleep(2)
@@ -316,7 +318,8 @@ def start_vnc(payload=None) -> dict:
             x11vnc, "-display", DISPLAY, "-rfbport", "5901", "-nopw", "-forever",
             "-localhost", "-quiet", "-shared", "-noshm",
         ]
-        STREAM_PROC = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Undrained PIPEs fill after ~64 KB and stall the VNC server.
+        STREAM_PROC = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         # Wait for x11vnc to actually bind the VNC port before we start pumping,
         # otherwise noVNC would connect to an empty tunnel and show a black screen.

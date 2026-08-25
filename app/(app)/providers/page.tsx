@@ -210,6 +210,10 @@ export default function ProvidersPage() {
         setDlUrl(null);
         setDlCode("");
         setLoginSuccess("Epic Games — Connected");
+        setTimeout(() => setLoginSuccess(null), 5000);
+        // Refresh immediately so the card flips to Connected and the pending
+        // auto-sync fires — nothing else polls after a device link.
+        fetchProviders();
       } else {
         pendingAutoSync.current = null;
         setDlError(typeof data.error === "string" ? data.error : "Link failed — check the code and retry.");

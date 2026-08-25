@@ -48,12 +48,16 @@ function GamesPage() {
 
   // Name search runs SERVER-SIDE against the entire catalog (`?q=`), not just
   // the already-loaded slice — so any game can be found by its name.
+  const searchSeq = useRef(0);
   useEffect(() => {
     const q = search.trim();
+    const seq = ++searchSeq.current;
     if (!q) {
       // Restore the paged view after clearing the search.
       setLoading(true);
-      loadSlice(0, true).catch(() => {}).finally(() => setLoading(false));
+      loadSlice(0, true).catch(() => {}).finally(() => {
+        if (seq === searchSeq.current) setLoading(false);
+      });
       return;
     }
     const t = setTimeout(() => {
@@ -61,12 +65,15 @@ function GamesPage() {
       fetch(api(`/api/games?q=${encodeURIComponent(q)}&sort=${sort}&meta=0`), { headers: { ...authHeader() } })
         .then((r) => r.json())
         .then((j) => {
+          if (seq !== searchSeq.current) return; // a newer query already answered
           const list: GameEntry[] = j.data || [];
           setGames(list);
           setTotal(list.length);
         })
         .catch(() => {})
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (seq === searchSeq.current) setLoading(false);
+        });
     }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

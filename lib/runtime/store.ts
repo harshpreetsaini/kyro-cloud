@@ -470,6 +470,20 @@ export async function runtimeRefreshStream() {
   } catch {}
 }
 
+// Full identity reset for logout: the module-level WS and per-user state
+// (including the plaintext Steam password) must not survive into the next
+// sign-in on the same tab.
+export function resetRuntime() {
+  started = false;
+  retry = 0;
+  pendingInstall = null;
+  if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+  try { ws?.close(); } catch {}
+  ws = null;
+  state = { ...EMPTY };
+  emit();
+}
+
 export function ensureConnected() {
   started = true;
   connect();

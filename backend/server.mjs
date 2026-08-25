@@ -279,8 +279,10 @@ async function hydrateLinkedFromVercel(userId) {
     for (const [provider, rec] of Object.entries(wire)) {
       if (!rec || typeof rec !== "object") continue;
       const cur = activeLinked[provider];
-      if (!cur || Number(rec.linkedAt || 0) >= Number(cur.linkedAt || 0)) {
-        activeLinked[provider] = { ...rec, linkedAt: rec.linkedAt || Date.now() };
+      // Strictly newer records only — a durable row without linkedAt must
+      // never clobber a fresher local link.
+      if (!cur || Number(rec.linkedAt || 0) > Number(cur.linkedAt || 0)) {
+        activeLinked[provider] = { ...rec };
         merged++;
       }
     }
@@ -407,17 +409,25 @@ async function handleApi(req, res, url) {
       // Runtime cache for agent relay (plaintext, in-memory only).
       activeLinked[provider] = record;
       saveLinked();
-      if (mgr.activeUserId == null) {
+      // Attribute the link to the HTTP session's user when available —
+      // mgr.activeUserId reflects whichever browser WS connected last, which
+      // is not necessarily the caller.
+      let httpUserId = null;
+      {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
-        const u = await verifySession(tok);
-        if (u && u.userId != null) mgr.activeUserId = u.userId;
+        const cookieMatch = req.headers.cookie ? req.headers.cookie.match(new RegExp(SESSION_COOKIE + "=([^;]+)")) : null;
+        const sess = await verifySession(tok || (cookieMatch ? decodeURIComponent(cookieMatch[1]) : ""));
+        if (sess && sess.userId != null) {
+          httpUserId = sess.userId;
+          if (mgr.activeUserId == null) mgr.activeUserId = sess.userId;
+        }
       }
-      // Persist to Vercel Postgres (durable) unless this call already came from
-      // Vercel (service key), which would create a relay loop. Fall back to the
-      // owner account when no browser WS session has attributed an activeUserId
-      // yet, so links survive backend restarts regardless of client timing.
-      if (!authedByService) {
-        const uid = mgr.activeUserId != null ? mgr.activeUserId : "owner";
+      // Persist to Vercel Postgres (durable). Skipped when the call already
+      // came FROM Vercel (service key, relay loop) or from the agent itself —
+      // otherwise the agent's own report would echo straight back to it and
+      // re-persist in an infinite loop.
+      if (!authedByService && !authedByAgent) {
+        const uid = httpUserId != null ? httpUserId : mgr.activeUserId != null ? mgr.activeUserId : "owner";
         persistLinkedToVercel(provider, record, uid).catch(() => {});
       }
       mgr.broadcast({
@@ -432,8 +442,11 @@ async function handleApi(req, res, url) {
           ts: Date.now(),
         });
       }
-      // Relay to the cloud agent so installs run under this account.
-      mgr.sendToAgent({ type: "provider.linked", payload: { ...record, provider } });
+      // Relay to the cloud agent so installs run under this account — but not
+      // back to the agent that itself reported this link (infinite loop).
+      if (!authedByAgent) {
+        mgr.sendToAgent({ type: "provider.linked", payload: { ...record, provider } });
+      }
       return sendJson(req, res, 200, { ok: true });
     }
     if (method === "GET") {

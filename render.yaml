@@ -17,7 +17,9 @@ services:
         # CORS on the backend allows only this origin (never "*" with credentials).
         value: https://kyro-cloud.vercel.app
       - key: AUTH_SECRET
-        generateValue: true
+        # MUST be set to the SAME value as Vercel's AUTH_SECRET — the backend
+        # verifies browser session JWTs signed by the frontend.
+        sync: false
       - key: LUNA_USER
         sync: false
       - key: LUNA_PASSWORD
@@ -25,6 +27,14 @@ services:
       - key: RUNTIME_AUTH_SECRET
         # Shared with the Colab agent via the LUNA_RUNTIME_AUTH Colab secret.
         generateValue: true
+      - key: BACKEND_SERVICE_KEY
+        # Shared service key between Vercel and Render — enables durable
+        # provider-link persistence + hydration (set identically on both).
+        sync: false
+      - key: CREDENTIAL_SECRET
+        # Encryption-at-rest key for linked provider credentials. Set the same
+        # value on Vercel; rotating it invalidates every stored secret.
+        sync: false
       - key: COMPUTE_PROVIDER
         value: colab
       - key: STREAMING_PROVIDER

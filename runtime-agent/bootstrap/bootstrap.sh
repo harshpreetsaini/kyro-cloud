@@ -192,7 +192,7 @@ if ! id gamer >/dev/null 2>&1; then
   echo "[bootstrap] creating 'gamer' user..." >> /tmp/luna-agent.log
   useradd -m -s /bin/bash gamer 2>/dev/null || true
 fi
-usermod -aG video,audio,gamer gamer 2>/dev/null || true
+usermod -aG video,audio gamer 2>/dev/null || true
 mkdir -p /home/gamer/.config /home/gamer/.cache
 chown -R gamer:gamer /home/gamer 2>/dev/null || true
 
@@ -212,7 +212,7 @@ mkdir -p "$HOME/.steam" /home/gamer/games
 if command -v runuser >/dev/null 2>&1; then
   exec runuser -u gamer -- "$REAL" "$@"
 else
-  exec su gamer -s /bin/bash -c 'exec "$0" "$@"' "$REAL" "$@"
+  exec su -s /bin/bash gamer -c 'exec "$0" "$@"' "$REAL" "$@"
 fi
 WRAP
   chmod +x /usr/local/bin/steamcmd

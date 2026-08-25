@@ -84,7 +84,7 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { launchGame, stopGame, runningGames, installedGames } = useRuntime();
+  const { launchGame, stopGame, runningGames, installedGames, resetRuntime } = useRuntime();
   const [user, setUser] = useState<UserData | null>(null);
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [games, setGames] = useState<GameEntry[]>([]);
@@ -139,6 +139,9 @@ export default function ProfilePage() {
       try { localStorage.removeItem("kyro_favorites_cache"); } catch {}
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {}
+    // Tear down the authenticated WS + in-memory per-user state (including
+    // stored Steam credentials) so nothing bleeds into the next sign-in.
+    resetRuntime();
     setToken(null);
     router.push("/login");
   }
