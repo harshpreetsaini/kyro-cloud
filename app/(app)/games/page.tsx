@@ -46,34 +46,39 @@ function GamesPage() {
     return slice.length;
   }, [sort, total]);
 
+  // Name search runs SERVER-SIDE against the entire catalog (`?q=`), not just
+  // the already-loaded slice — so any game can be found by its name.
   useEffect(() => {
-    let cancelled = false;
-    loadSlice(0, true)
-      .catch(() => {})
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Re-sort server-side when the sort control changes (reset to first slice).
-  const firstSort = useRef(true);
-  useEffect(() => {
-    if (firstSort.current) {
-      firstSort.current = false;
+    const q = search.trim();
+    if (!q) {
+      // Restore the paged view after clearing the search.
+      setLoading(true);
+      loadSlice(0, true).catch(() => {}).finally(() => setLoading(false));
       return;
     }
-    setLoading(true);
-    loadSlice(0, true)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    const t = setTimeout(() => {
+      setLoading(true);
+      fetch(api(`/api/games?q=${encodeURIComponent(q)}&sort=${sort}&meta=0`), { headers: { ...authHeader() } })
+        .then((r) => r.json())
+        .then((j) => {
+          const list: GameEntry[] = j.data || [];
+          setGames(list);
+          setTotal(list.length);
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort]);
+  }, [search, sort]);
+
+  // The search effect above owns loading: on mount (empty query) it restores
+  // the paged view, and any sort change flows through the same path.
 
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
+    if (search.trim()) return; // full-catalog search results are shown as-is
     const ob = new IntersectionObserver(
       ([e]) => {
         if (!e.isIntersecting || loadingMore || loading) return;
@@ -87,7 +92,7 @@ function GamesPage() {
     );
     ob.observe(el);
     return () => ob.disconnect();
-  }, [games.length, total, loadingMore, loading, loadSlice]);
+  }, [games.length, total, loadingMore, loading, loadSlice, search]);
 
   const filteredGames = useMemo(() => {
     let result = games;

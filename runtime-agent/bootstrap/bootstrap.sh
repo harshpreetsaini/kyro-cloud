@@ -127,6 +127,24 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libssl-dev libcrypto++-dev 2>/dev/null || true
 
+# ── Game-store CLIs: Epic (legendary) + GOG (lgogdownloader) ──────────
+# Provisioned here so Epic/GOG downloads work on first boot instead of
+# failing at install time (Colab's externally-managed Python blocks runtime
+# pip installs).
+echo "[bootstrap] installing game-store CLIs (Epic/GOG)..." >> /tmp/luna-agent.log
+DEBIAN_FRONTEND=noninteractive apt-get install -y lgogdownloader >/dev/null 2>&1 || true
+python3 -m pip install --quiet --break-system-packages legendary-gl 2>>/tmp/luna-agent.log \
+  || pip3 install --quiet --break-system-packages legendary-gl 2>>/tmp/luna-agent.log \
+  || python3 -m pip install --quiet legendary-gl 2>>/tmp/luna-agent.log || true
+if command -v legendary >/dev/null 2>&1; then
+  echo "[bootstrap] legendary present ($(legendary --version 2>/dev/null | head -1))" >> /tmp/luna-agent.log
+else
+  echo "[bootstrap] [WARN] legendary unavailable — Epic downloads will prompt for bootstrap re-run" >> /tmp/luna-agent.log
+fi
+command -v lgogdownloader >/dev/null 2>&1 \
+  && echo "[bootstrap] lgogdownloader present" >> /tmp/luna-agent.log \
+  || echo "[bootstrap] [WARN] lgogdownloader unavailable — GOG downloads will fail" >> /tmp/luna-agent.log
+
 echo "[bootstrap] installing aiortc system deps..." >> /tmp/luna-agent.log
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libavcodec-dev libavdevice-dev libavformat-dev libswscale-dev \

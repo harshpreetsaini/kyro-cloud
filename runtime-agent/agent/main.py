@@ -201,6 +201,36 @@ def _load_creds(provider):
         return ""
 
 
+# ── Steam session reuse ────────────────────────────────────────────────
+# A successful guard-verified login caches a sentry token inside steamcmd's
+# config. Subsequent `+login <user>` WITHOUT the password reuse that session
+# silently. Passing the password again forces a full re-authentication, which
+# is what makes Valve email a fresh Steam Guard code for every install.
+def _steam_session_ok():
+    try:
+        return os.path.exists(os.path.join(_AUTH_DIR, "steam_session_ok"))
+    except Exception:
+        return False
+
+
+def _mark_steam_session_ok():
+    try:
+        os.makedirs(_AUTH_DIR, exist_ok=True)
+        with open(os.path.join(_AUTH_DIR, "steam_session_ok"), "w") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
+
+
+def _clear_steam_session_ok():
+    try:
+        pth = os.path.join(_AUTH_DIR, "steam_session_ok")
+        if os.path.exists(pth):
+            os.remove(pth)
+    except Exception:
+        pass
+
+
 def url() -> str:
     sep = "?" if "?" not in BACKEND_WS else "&"
     return f"{BACKEND_WS}{sep}token={TOKEN}"
@@ -852,27 +882,39 @@ def _provider_login(ws, p):
         try:
             if provider == "steam":
                 import subprocess
-                ok = False
-                err = None
                 err = None
                 owned = []
-                try:
-                    cmd = ["steamcmd", "+login", username, password]
+
+                def _attempt(with_password):
+                    """One full steamcmd login. Returns (ok, error, owned_apps)."""
+                    ok = False
+                    err = None
+                    owned = []
+                    cmd = ["steamcmd", "+login", username]
+                    if with_password:
+                        cmd.append(password)
                     cmd = _wrap_steamcmd(cmd)
                     proc = subprocess.Popen(
                         cmd,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1)
-                    gseq = [0]
                     authed = False
                     guard_attempts = 0
                     MAX_GUARD = 3
                     requesting = False
                     for line in proc.stdout:
-                        if "Steam account successfully logged in" in line:
+                        lo = line.lower()
+                        # Success markers: steamcmd prints 'Logged in OK' /
+                        # 'Waiting for user info... OK' after a completed login.
+                        if (
+                            "logged in ok" in lo
+                            or "waiting for user info" in lo
+                            or "steam account successfully logged in" in lo
+                        ):
                             ok = True
                             authed = True
                             requesting = False
+                            _mark_steam_session_ok()
                             # Pull the owned-apps list while we're authenticated.
                             try:
                                 proc.stdin.write("+apps_list\n")
@@ -880,6 +922,19 @@ def _provider_login(ws, p):
                             except Exception:
                                 pass
                             continue
+                        # Passwordless attempt hit a dead session: steamcmd asks
+                        # for the password interactively and would hang forever.
+                        if not with_password and (
+                            "invalid password" in lo
+                            or "failed to login" in lo
+                            or lo.rstrip().endswith("password:")
+                        ):
+                            err = "cached session expired"
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                            return ok, err, owned
                         lo = line.lower()
                         # Only handle a guard prompt before we're authenticated; once
                         # logged in, ignore any trailing guard-related log lines.
@@ -905,7 +960,7 @@ def _provider_login(ws, p):
                         # prompt request a code again (one attempt per cycle).
                         if not authed and (("logging in" in lo) or ("authenticating" in lo) or ("invalid" in lo) or ("incorrect" in lo) or ("wrong" in lo)):
                             requesting = False
-                        # Steamcmd apps_list output: "<appid>\t<name>"
+                        # steamcmd apps_list output: "<appid>\t<name>"
                         s = line.strip()
                         if s and s[0].isdigit() and "\t" in s:
                             owned.append(s.split("\t", 1)[0])
@@ -922,8 +977,19 @@ def _provider_login(ws, p):
                             proc.kill()
                         except Exception:
                             pass
-                except Exception as ex:
-                    err = str(ex)
+                    return ok, err, owned
+
+                # Reuse the cached Steam session when one exists (passwordless
+                # login → no fresh Steam Guard challenge). Only fall back to a
+                # full password login when there is no valid cached session.
+                reuse = _steam_session_ok() and bool(username)
+                ok, err, owned = _attempt(not reuse)
+                if not ok and reuse:
+                    # Cached session was rejected/expired — clear it and do one
+                    # full login so a new sentry is cached for future installs.
+                    print(f"[agent] cached Steam session rejected — performing full login", flush=True)
+                    _clear_steam_session_ok()
+                    ok, err, owned = _attempt(True)
                 # Persist credentials as soon as the user provides them so game
                 # installs (including free-to-play) can run under this account.
                 # steamcmd verification below only enriches the owned-games list;
@@ -1257,19 +1323,26 @@ def _game_install(ws, p):
                     send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Steam account not linked — link your Steam account in Providers to install this game (a real account is required even for free-to-play titles)."})
                     send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account not linked"})
                     return
+                # Session reuse: once a guard-verified session is cached,
+                # `+login <user>` WITHOUT the password reuses it silently.
+                # Sending the password again forces a full re-auth and a new
+                # Steam Guard email on every single install — avoid that.
+                reuse_session = _steam_session_ok() and bool(steam_user)
                 login_args = ["+login", steam_user]
-                if steam_pass:
+                if steam_pass and not reuse_session:
                     login_args.append(steam_pass)
-                print(f"[agent] steamcmd install: app={app_id} user={steam_user} dir={install_dir}", flush=True)
+                print(f"[agent] steamcmd install: app={app_id} user={steam_user} dir={install_dir} session_reuse={reuse_session}", flush=True)
 
                 def _run_steamcmd_attempt(force_windows: bool):
-                    """One full steamcmd run. Returns (ok, platform_error)."""
+                    """One full steamcmd run. Returns (ok, platform_error, license_error, stale_session)."""
                     percent = total_bytes = speed_bps = 0
                     authed = False
                     guard_attempts = 0
                     MAX_GUARD = 3
                     requesting = False
                     platform_hit = False
+                    license_hit = False
+                    stale_session = False
                     started = time.time()
                     cmd = ["steamcmd", "+force_install_dir", install_dir]
                     if force_windows:
@@ -1289,25 +1362,31 @@ def _game_install(ws, p):
                             _kill_proc_group(proc)
                             _cleanup_install(game_id)
                             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
-                            return False, False
+                            return False, False, False, False
                         if time.time() - started > INSTALL_TIMEOUT_SECONDS:
                             _log(f"timeout after {INSTALL_TIMEOUT_SECONDS}s\n")
                             _kill_proc_group(proc)
                             send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": f"Install timed out after {INSTALL_TIMEOUT_SECONDS // 60} minutes."})
                             send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Install timed out"})
-                            return False, False
+                            return False, False, False, False
                         lo = line.lower().strip()
-                        # License/ownership failure: the linked account does not own
-                        # this app. Even free-to-play Steam titles must be in the
-                        # account's library before steamcmd can download them.
-                        if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
-                            _log("steamcmd license error: " + line)
+                        # Stale cached session (passwordless login rejected): steamcmd
+                        # asks for the password or reports invalid credentials. Clear
+                        # the marker so the caller can retry with a full login.
+                        if not reuse_session and ("invalid password" in lo or "password:" in lo or "failed to login" in lo or "login failure" in lo):
+                            _log("cached Steam session rejected — will retry with password\n")
                             _kill_proc_group(proc)
-                            _cleanup_install(game_id)
-                            gname = p.get("name") or f"app {app_id}"
-                            send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Your Steam account '" + str(steam_user) + "' does not own " + str(gname) + ". Even free-to-play Steam games must be added to your Steam library (free) before they can be installed. Open the Steam store, add it to your library, then retry."})
-                            send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account does not own this game"})
-                            return False, False
+                            stale_session = True
+                            break
+                        # License/ownership failure. For free-to-play titles the FIRST
+                        # app_update often fails because the free sub isn't attached
+                        # yet — the caller retries once before treating this as a
+                        # genuine ownership problem.
+                        if "no subscription" in lo or "does not have a license" in lo or "not available for your account" in lo:
+                            _log("steamcmd license error (may auto-resolve on retry): " + line)
+                            _kill_proc_group(proc)
+                            license_hit = True
+                            break
                         # Platform errors trigger the Windows/Proton retry instead of
                         # failing outright — Windows-only titles are fully supported.
                         if "invalid platform" in lo or ("platform" in lo and "not available" in lo) or "no linux depot" in lo or ("error!" in lo and "platform" in lo):
@@ -1330,7 +1409,7 @@ def _game_install(ws, p):
                                 send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam Guard code rejected too many times."})
                                 _kill_proc_group(proc)
                                 _cleanup_install(game_id)
-                                return False, False
+                                return False, False, False, False
                             guard_code = _request_steam_guard(f"install-{game_id}")
                             if guard_code and proc.stdin:
                                 try:
@@ -1389,6 +1468,10 @@ def _game_install(ws, p):
                         if any(k in lo for k in ("beginning download", "updating", "installing", "validating")):
                             authed = True
                             requesting = False
+                            # A download starting means this login succeeded — cache
+                            # the session so future installs skip the password (and
+                            # any new Steam Guard challenge) entirely.
+                            _mark_steam_session_ok()
                             percent = min(percent + 2, 95)
                             _send_progress("downloading", percent, 0, total_bytes, speed_bps)
                     try:
@@ -1412,11 +1495,12 @@ def _game_install(ws, p):
                         pass
                     success_markers = ("fully installed", "fully updated", "Success! App")
                     attempt_ok = proc.returncode == 0 or manifest_ok or any(m in log_text for m in success_markers)
-                    return attempt_ok, platform_hit
+                    return attempt_ok, platform_hit, license_hit, stale_session
 
                 _send_progress("downloading", 0)
                 # Phase 1: native Linux depots.
-                ok, platform_hit = _run_steamcmd_attempt(force_windows=False)
+                ok, platform_hit, license_hit, stale_session = _run_steamcmd_attempt(force_windows=False)
+                used_windows = False
                 # Phase 2 (Proton): the title ships no Linux content — fetch the
                 # Windows depots; launch routes it through umu-run/Proton.
                 if not ok and platform_hit and not _cancelled():
@@ -1426,7 +1510,8 @@ def _game_install(ws, p):
                     with _install_lock:
                         _installs[game_id]["proton"] = True
                     _send_progress("checking", 1)
-                    ok, _ = _run_steamcmd_attempt(force_windows=True)
+                    used_windows = True
+                    ok, platform_hit, license_hit, stale_session = _run_steamcmd_attempt(force_windows=True)
                     if ok:
                         try:
                             with open(os.path.join(install_dir, ".kyro_proton"), "w") as mf:
@@ -1434,15 +1519,79 @@ def _game_install(ws, p):
                         except Exception:
                             pass
                         print(f"[agent] proton install complete: game={game_id}", flush=True)
+                # Phase 3: cached Steam session rejected (e.g. expired sentry) —
+                # clear it and retry once with a full password login. This may
+                # trigger a fresh Steam Guard email; that's expected and rare.
+                if not ok and stale_session and not _cancelled():
+                    _clear_steam_session_ok()
+                    if steam_pass:
+                        login_args = ["+login", steam_user, steam_pass]
+                    _cleanup_install(game_id)
+                    os.makedirs(install_dir, exist_ok=True)
+                    _send_progress("checking", 1)
+                    ok, platform_hit, license_hit, stale_session = _run_steamcmd_attempt(force_windows=used_windows)
+                    if ok and used_windows:
+                        try:
+                            with open(os.path.join(install_dir, ".kyro_proton"), "w") as mf:
+                                mf.write("windows\n")
+                        except Exception:
+                            pass
+                # Phase 4: free-to-play license acquisition. The first app_update
+                # attaches the free sub to the account — an immediate identical
+                # retry then succeeds. Only a second failure means the account
+                # genuinely doesn't have the game in its library.
+                if not ok and license_hit and not _cancelled():
+                    gname = p.get("name") or f"app {app_id}"
+                    _log(f"free-license acquisition retry for {app_id}\n")
+                    _cleanup_install(game_id)
+                    os.makedirs(install_dir, exist_ok=True)
+                    _send_progress("checking", 1)
+                    time.sleep(3)
+                    ok, _, license_hit, _ = _run_steamcmd_attempt(force_windows=used_windows)
+                    if ok and used_windows:
+                        try:
+                            with open(os.path.join(install_dir, ".kyro_proton"), "w") as mf:
+                                mf.write("windows\n")
+                        except Exception:
+                            pass
+                    if not ok and license_hit:
+                        send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": "Your Steam account '" + str(steam_user) + "' does not own " + str(gname) + ". Even free-to-play Steam games must be added to your Steam library (free) before they can be installed. Open the Steam store, add it to your library, then retry."})
+                        send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Steam account does not own this game"})
+                        return
                 if ok:
                     _report_installed_games(ws, _games_base())
             elif install_method == "legendary" and app_id:
+                # Epic requirements: the legendary CLI must exist AND be
+                # authenticated before a download can start. If the account is
+                # not linked we ask the UI to run the device-link flow; the app
+                # replays this install automatically once linking completes.
+                def _epic_login_required(reason):
+                    send(ws, "provider.login.required", {"provider": "epic", "gameId": game_id})
+                    send(ws, "game.install.progress", {"gameId": game_id, "state": "error", "percent": 0, "error": reason or "Epic Games login required."})
+                    send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Epic login required"})
+
+                _ensure_tool("legendary-gl", "legendary")
+                lcmd = _legendary_cmd()
+                if not lcmd:
+                    _epic_login_required("The Epic Games CLI (legendary) is not available on your Cloud PC yet — restart the bootstrap to install it.")
+                    return
+                _send_progress("checking", 0)
+                try:
+                    chk = subprocess.run(lcmd + ["whoami"], capture_output=True, text=True, timeout=30)
+                    who = ((chk.stdout or "") + (chk.stderr or "")).lower()
+                    authed = chk.returncode == 0 and "username:" in who and not ("not logged in" in who or "not authorized" in who)
+                except Exception:
+                    authed = False
+                if not authed:
+                    print("[agent] epic install blocked: legendary not authenticated — requesting device link", flush=True)
+                    _epic_login_required("Connect your Epic Games account to download this game.")
+                    return
                 _send_progress("downloading", 0)
-                lcmd = _legendary_cmd() or ["legendary"]
                 proc = subprocess.Popen(lcmd + ["install", app_id, "--no-https", "--no-skip-dlcs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
                 ctx["proc"] = proc
                 _agent_pids.append(proc.pid)
                 percent = 0
+                login_hit = False
                 for line in proc.stdout:
                     if _cancelled():
                         _kill_proc_group(proc)
@@ -1450,6 +1599,17 @@ def _game_install(ws, p):
                         send(ws, "game.install.done", {"gameId": game_id, "success": False, "error": "Cancelled", "cancelled": True})
                         return
                     lo = line.lower().strip()
+                    if not login_hit and (
+                        "not logged in" in lo
+                        or "please run legendary auth" in lo
+                        or "unable to find the login" in lo
+                    ):
+                        login_hit = True
+                        _kill_proc_group(proc)
+                        _cleanup_install(game_id)
+                        print("[agent] legendary reported no session — requesting device link", flush=True)
+                        _epic_login_required("Your Epic Games session expired — reconnect your account.")
+                        return
                     prog_match = re.search(r'(\d+(?:\.\d+)?)%', lo)
                     if prog_match:
                         percent = float(prog_match.group(1))

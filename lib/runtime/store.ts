@@ -50,6 +50,7 @@ interface RuntimeState {
   installedGames: Record<string, boolean>;
   steamOwnedApps: string[];
   providerGames: Record<string, { appId: string; name: string }[]>;
+  loginRequired: string | null;
 }
 
 const EMPTY: RuntimeState = {
@@ -69,6 +70,7 @@ const EMPTY: RuntimeState = {
   installedGames: {},
   steamOwnedApps: [],
   providerGames: {},
+  loginRequired: null,
 };
 
 let state: RuntimeState = EMPTY;
@@ -406,6 +408,18 @@ function connect() {
         emit();
         break;
       }
+      case "provider.login.required": {
+        // The runtime needs an account link before this download can start
+        // (e.g. Epic via legendary). The modal collects it; on success the
+        // pending install is replayed automatically.
+        const p = event.payload as { provider?: string };
+        if (p.provider) {
+          notify(`${p.provider === "epic" ? "Epic Games" : p.provider} login required — connect your account to download.`, "warning");
+          state = { ...state, loginRequired: p.provider };
+          emit();
+        }
+        break;
+      }
       case "provider.entitlement": {
         const p = event.payload as { provider?: string; username?: string; appIds?: string[] };
         if (p.provider === "steam" && Array.isArray(p.appIds)) {
@@ -488,6 +502,33 @@ export function runtimeSubmitGuard(code: string) {
   emit();
 }
 
+// Called after a provider account is connected (e.g. Epic device link):
+// clears the login requirement and replays the install that was blocked.
+export function runtimeCompleteProviderLogin(provider: string) {
+  const wasRequired = state.loginRequired === provider;
+  state = { ...state, loginRequired: null };
+  emit();
+  if (wasRequired && pendingInstall) {
+    const payload = pendingInstall;
+    pendingInstall = null;
+    state = {
+      ...state,
+      installProgress: {
+        ...state.installProgress,
+        [payload.id]: { gameId: payload.id, state: "requested", percent: 0, downloadedBytes: 0, totalBytes: 0, speedBytesPerSec: 0, etaSeconds: 0 },
+      },
+    };
+    emit();
+    runtimeSend("game.install", payload);
+  }
+}
+
+export function runtimeDismissLoginRequired() {
+  pendingInstall = null;
+  state = { ...state, loginRequired: null };
+  emit();
+}
+
 export function runtimeInstallGame(id: string) {
   // Look up the game to build the install payload (provider, appId, method)
   let game: any = null;
@@ -528,8 +569,13 @@ export function runtimeInstallApp(provider: string, appId: string, name: string)
   });
 }
 
+// The install payload that triggered a provider-login requirement — replayed
+// automatically once the account is connected.
+let pendingInstall: { id: string; name?: string; installMethod: string; provider: string; appId?: string; isFree?: boolean; steamUser?: string; steamPass?: string } | null = null;
+
 function _sendInstall(payload: { id: string; name?: string; installMethod: string; provider: string; appId?: string; isFree?: boolean; steamUser?: string; steamPass?: string }) {
   const id = payload.id;
+  pendingInstall = payload;
   // Set local installing state immediately (backend will confirm shortly)
   state = {
     ...state,

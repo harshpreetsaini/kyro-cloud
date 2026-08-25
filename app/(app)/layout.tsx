@@ -6,6 +6,7 @@ import { RuntimeProvider } from "@/components/providers/RuntimeProvider";
 import { Notifications } from "@/components/Notifications";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import SteamGuardModal from "@/components/SteamGuardModal";
+import EpicLoginModal from "@/components/EpicLoginModal";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -21,6 +22,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </div>
       <Notifications />
       <SteamGuardModal />
+      <EpicLoginModal />
     </RuntimeProvider>
   );
 }
